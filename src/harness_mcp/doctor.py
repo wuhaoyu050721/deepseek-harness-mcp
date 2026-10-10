@@ -418,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     report = collect_checks(config)
     if config is not None:
         from dataclasses import asdict
-        report["configuration"] = {"valid":True,"project_ids":sorted(config.projects),"data_dir":str(config.data_dir),"model":asdict(config.model),"backend":config.executor.backend,"credential_reference_available":report["credential_presence"]["configured_reference_available"],"credential_validity":"not_verified"}
+        report["configuration"] = {"valid":True,"project_ids":sorted(config.projects),"data_dir":str(config.data_dir),"model":asdict(config.model),"backend":config.executor.backend,"default_mode":config.default_mode,"completion":asdict(config.completion),"credential_reference_available":report["credential_presence"]["configured_reference_available"],"credential_validity":"not_verified"}
         if config.executor.backend == "docker":
             report["configuration"].update(worker_image=config.executor.image,worker_image_build_verified=False)
     elif configuration_error:

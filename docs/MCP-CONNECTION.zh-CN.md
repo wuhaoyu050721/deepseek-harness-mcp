@@ -1,6 +1,6 @@
 # Windows 上连接 DeepSeek Harness MCP
 
-本教程针对 0.3.2 的 Windows `desktop` 路线和 `--shared` 多会话连接。完成后，Codex 或 Claude Code 可以提交 DeepSeek 代码审查任务；按项目开启编辑权限后，也可以让 DeepSeek 修改任务副本，再由主 AI 复核、合入和验证。下载前请确认所选发布包包含 0.3.2，共享功能不在 0.3.1 中。
+本教程针对 0.3.3 的 Windows `desktop` 路线、`--shared` 多会话连接、Codex 桌面通知和可选 Claude 实验 channel。Codex 或 Claude Code 可以审查代码或修改授权副本，再由主 AI 复核、合入和验证。新 desktop 配置默认允许副本编辑；旧配置未设置新字段时保留审查默认。多会话至少需要 0.3.2；通知桥和可信默认模式需要 0.3.3。Codex 空闲唤醒、自动读取及实际完成工具入口，Claude 通道传输已验收；Claude 应用内续跑仍未验证。具体范围见 [验证记录](VALIDATION.md)，发布状态以 Releases 为准。
 
 这个 MCP 通过本机 **stdio** 连接，由每个客户端会话启动自己的 Python 前端。教程中的 `--shared` 使这些前端复用一个本机后台，共享任务队列、请求编号和历史。客户端仍配置程序路径和参数，无须填写 HTTP 网址。前端与后台使用经过双向认证的本机回环连接。服务使用已安装的 DeepSeek Harness 桌面运行时；模型、接口地址和凭证引用由本项目的本机 TOML 配置指定，不会自动继承桌面聊天窗口当前选择的模型。
 
@@ -48,14 +48,21 @@ uv sync --locked --python 3.14 --no-install-package deepseek-harness-runtime-bin
 | `config/claude.local.toml` | Claude Code 对应的模型、项目授权和默认独立数据目录 |
 | `examples/codex.local.toml` | 按本机路径生成的 Codex 配置片段 |
 | `examples/claude.local.json` | 按本机路径生成的 Claude 配置片段 |
+| `examples/claude.channel.local.json` | 可选 Claude 实验 channel 配置片段；普通 Claude 配置不带 channel 参数 |
 
-脚本不会修改个人客户端配置，不会调用模型，也不会覆盖已经存在的上述本机文件。重新解压、升级或移动安装目录后，已有文件需要人工检查路径，重新运行脚本不会替你改写它们。从 0.3.1 升级时尤其要在客户端参数中加入 `--shared`。源码 ZIP 是否带 `.git` 不影响创建和使用人工示例项目：ZIP 安装会先只授权 `sample`，不用为安装目录运行 `git init`。自己的业务项目按第 6 节单独授权。
+脚本不会修改个人客户端配置，不会调用模型，也不会覆盖已经存在的上述本机文件。新 desktop 配置设置 `default_mode="edit"`、授权项目 `allow_edits=true` 和 `completion.auto_continue=true`。重新解压、升级或移动安装目录后，已有文件需要人工检查路径与新字段，重新运行脚本不会替你改写它们。从 0.3.1 升级时尤其要在客户端参数中加入 `--shared`。源码 ZIP 是否带 `.git` 不影响创建和使用人工示例项目：ZIP 安装会先只授权 `sample`，不用为安装目录运行 `git init`。自己的业务项目按第 6 节单独授权。
 
 ### 检查桌面 runtime、模型和凭证引用
 
 打开 `config/codex.local.toml`，默认主要内容是：
 
 ```toml
+data_dir = "../data/codex"
+default_mode = "edit"
+
+[completion]
+auto_continue = true
+
 [model]
 provider = "deepseek-official"
 model = "deepseek-flash"
@@ -67,6 +74,8 @@ credential_env = "DEEPSEEK_API_KEY"
 backend = "desktop"
 desktop_root = ""
 ```
+
+`default_mode` 是根字段，须放在首个表头之前；未配置时为 `review`。新 desktop 配置的 `edit` 只允许修改已授权的独立副本，并要求相应项目 `allow_edits=true`。单次只读任务指定 `mode="review"` 即可，不需要再次修改权限或热重载。Docker 不支持默认编辑。`completion.auto_continue` 未配置时为 `false`，是否真正绑定原对话还须核对任务回执。
 
 默认自动检测 `%LOCALAPPDATA%/Programs/DeepSeek Harness`。如果桌面端安装在其他地方，将 `desktop_root` 改为安装目录的绝对路径，例如 `D:/Apps/DeepSeek Harness`，该目录下应有 `DeepSeek Harness.exe` 和 `resources`。
 
@@ -99,7 +108,7 @@ codex mcp add deepseek_harness -- 'D:/Tools/deepseek-harness-mcp/.venv/Scripts/p
 codex mcp list
 ```
 
-这会新增名为 `deepseek_harness` 的 MCP 配置。若已经有同名服务，请先检查现有内容，避免重复注册或替换其他任务使用的设置。这里只启动本机程序，因此不用 `--url`。注册后检查个人配置，将 `cwd` 设为安装目录、`startup_timeout_sec` 设为 30，字段位置见方法 B。CLI 添加参数本身不代替这两个设置。
+这会新增名为 `deepseek_harness` 的 MCP 配置。若已经有同名服务，请先检查现有内容，避免重复注册或替换其他任务使用的设置。这里只启动本机程序，因此不用 `--url`。注册后检查个人配置，将 `cwd` 设为安装目录、`startup_timeout_sec` 设为 30，并通过 `env_vars` 透传宿主动态通信句柄，字段位置见方法 B。CLI 添加参数本身不代替这些设置。
 
 ### 方法 B：合并配置片段
 
@@ -110,17 +119,20 @@ codex mcp list
 command = "D:/Tools/deepseek-harness-mcp/.venv/Scripts/python.exe"
 args = ["-m", "harness_mcp.server", "--shared", "--config", "D:/Tools/deepseek-harness-mcp/config/codex.local.toml"]
 cwd = "D:/Tools/deepseek-harness-mcp"
+env_vars = ["CODEX_APP_TOOLS_PIPE_PATH"]
 startup_timeout_sec = 30
 tool_timeout_sec = 30
-# 仅在 credential_source="env" 时需要：
-# env_vars = ["DEEPSEEK_API_KEY"]
+# credential_source="env" 时将凭证引用变量加入同一白名单：
+# env_vars = ["CODEX_APP_TOOLS_PIPE_PATH", "DEEPSEEK_API_KEY"]
 ```
+
+`CODEX_APP_TOOLS_PIPE_PATH` 由桌面宿主提供，`env_vars` 仅允许该环境变量传给 MCP 前端，不应在 `env` 或文件中硬编码 pipe 路径。宿主重启后动态值可能改变；原对话身份及能力仍须只读预检。普通 CLI 未提供该变量时仍可执行任务，自动通知会显示不可用原因。白名单字段参见 [Codex 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。
 
 安装包另有可直接参考的 [通用 Codex 配置](../examples/codex.mcp.example.toml)。stdio 配置和 CLI 注册方式参见 [Codex 官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。
 
 保存后，在 Codex 中重新连接 MCP 服务；若当前窗口仍显示旧工具参数，重启 Codex 或开启加载了新连接的聊天。共享后台首次启动需要创建私有登记目录和独立进程，`startup_timeout_sec = 30` 为这一阶段预留时间。`tool_timeout_sec` 是单次工具调用的等待时间；后台模型任务的总时限由 `timeout_seconds` 和服务配置决定，两者不同。
 
-共享模式连接成功后应能看到七个工具：原有 `harness_submit`、`harness_status`、`harness_result`、`harness_cancel`，以及 `harness_session_open`、`harness_session_send`、`harness_session_list`。客户端可能显示额外命名空间前缀。原有四个任务工具保持兼容；编辑模式还需要检查 `harness_submit` 的真实参数中存在 `mode`，并支持 `review` 和 `edit`。
+共享模式原有七个工具：`harness_submit`、`harness_status`、`harness_result`、`harness_cancel`，以及 `harness_session_open`、`harness_session_send`、`harness_session_list`。启用 `completion.auto_continue` 后再增加 `harness_watch`、`harness_completion_list`、`harness_completion_ack`，共十个。客户端可能显示命名空间前缀。工具可见不代表宿主唤醒可用，任务回执 `auto_continue=true` 仅表示完成机制已绑定。Codex 先对宿主能力和原对话做只读预检，失败时返回 false 与 `auto_continue_reason`，普通模型任务仍正常接纳。核对 `harness_submit` 与 `harness_session_open` 的真实 `mode` 默认值；`review/edit` 两种模式保持兼容。
 
 ## 4. 连接 Claude Code（可选）
 
@@ -136,6 +148,39 @@ claude mcp list
 
 需要重启或重新连接 Claude Code，并完成客户端本身要求的 MCP 授权。命令格式可用 `claude mcp add-json --help` 核对；安装包内的 [通用 Claude 配置](../examples/claude.mcp.example.json) 也可用于手工合并。该文件外层是 `mcpServers`，CLI `add-json` 接受的是其中单个服务对象，不能把整个外层文档直接传给它。连接和作用域说明参见 [Claude Code 官方 MCP 文档](https://code.claude.com/docs/en/mcp)。
 
+普通 Claude 连接可使用全部已启用的审查、编辑与子代理功能；共享模式为七工具，completion 开启时为十工具。未显式启用 channel 时，不具备 Claude 推送上下文，回执通常为 `auto_continue=false`，继续按原 job_id 查询即可。
+
+### Claude Code 实验 channel（可选）
+
+仅当希望 DeepSeek 完成后向当前 Claude 交互会话推送事件时启用此项。可使用初始化生成的 `examples/claude.channel.local.json` 注册相应服务，替代普通片段；它在服务参数中增加 `--claude-channel`，仍须保持可信 `[completion] auto_continue=true`。不要同时给同一名称重复注册。对应配置形状例如：
+
+```json
+{
+  "mcpServers": {
+    "deepseek_harness": {
+      "type": "stdio",
+      "command": "D:/Tools/deepseek-harness-mcp/.venv/Scripts/python.exe",
+      "args": ["-m", "harness_mcp.server", "--shared", "--claude-channel", "--config", "D:/Tools/deepseek-harness-mcp/config/claude.local.toml"]
+    }
+  }
+}
+```
+
+本服务声明 `capabilities.experimental["claude/channel"]`，发送 `notifications/claude/channel` 固定事件。Claude 还需在启动时允许该开发渠道；仅添加普通 MCP 配置不会自动登记 channel。官方研究预览要求交互启动和确认，`-p` 不能登记开发渠道。[Claude Channels 参考](https://code.claude.com/docs/en/channels-reference)
+
+在启动 Claude 的同一 PowerShell 中运行：
+
+```powershell
+$env:MCP_PROTOCOL_NEGOTIATION = 'legacy'
+claude --dangerously-load-development-channels server:deepseek_harness
+```
+
+`legacy` 须设置在 Claude 客户端进程启动之前；现代 MCP 协议不能承载 Claude channel，当前适配拒绝该推送路径。[Claude MCP 协议说明](https://code.claude.com/docs/en/mcp#push-messages-with-channels)、[环境变量参考](https://code.claude.com/docs/en/env-vars)
+
+回执 `auto_continue=true` 只表示后台绑定了 channel 机制；宿主不会向服务反馈开发渠道是否获准。事件 `delivery_status="channel_written"` 仅表示消息写入 stdio，不能证明 Claude 已接收或处理；未登记或组织策略阻止时可能无消息。完整处理结果后调用 `harness_completion_ack` 才有处理确认。[Claude 通知格式与送达语义](https://code.claude.com/docs/en/channels-reference#notification-format)
+
+每个 stdio 前端生成私有 connection/session 标识以隔离窗口，服务 session 标识不是 Claude 的真实会话编号。前端进程重启会生成新身份，已经绑定的作业不能通过 watch 改投新会话；当前没有安全的跨重启原会话证明。保留原 job_id 后仍可读取结果继续处理，不需要重新运行模型。`/clear` 或交互 resume 可能复用原 MCP 进程，因此这里保证连接和窗口路由，不宣称识别所有 Claude 对话切换。0.3.3 的真实 channel 送达及 Claude 自动处理仍待端到端验收。
+
 ## 5. 先验证工具，再选择是否调用模型
 
 工具发现成功只证明客户端能启动和连接 MCP。不要让客户端为“检查连接”自动提交模型任务。已安装 Codex CLI 时，可选运行不调用模型的握手探针：
@@ -144,7 +189,7 @@ claude mcp list
 .\.venv\Scripts\python.exe scripts\verify_clients.py --client codex --output .\artifacts\client-discovery.local.json
 ```
 
-探针使用临时客户端配置检查连接和任务工具，不修改个人注册配置。Claude Code 使用 `--client claude`；两者都已安装时可使用 `--client all`。原有四工具探针不能单独证明共享模式的三个会话工具或并发行为已通过验收，请同时核对真实工具列表及对应版本验证记录。
+探针使用临时客户端配置检查连接和任务工具，不修改个人注册配置。Claude Code 使用 `--client claude`；两者都已安装时可使用 `--client all`。原有四工具探针不能单独证明共享会话、完成事件或自动续跑已通过验收，请同时核对真实工具列表及对应版本验证记录。
 
 准备确认真实模型调用时，可以在 Codex 中发送下面这段话。**从这一轮开始会请求模型接口，并可能产生 API 费用。** 人工示例不含业务代码或密钥。
 
@@ -163,7 +208,23 @@ claude mcp list
 }
 ```
 
-提交回执不是完成结果。按返回的 `poll_after_seconds` 或更长间隔调用 `harness_status(job_id)`；结束后用 `harness_result(job_id)` 读取报告。`ready=false` 表示尚无报告。需要分页时保持相同 `page_size`，按该任务返回的 `next_cursor` 继续，不要跨任务复用游标。
+提交回执不是完成结果。`auto_continue=true` 表示当前客户端完成机制已绑定；Codex 桌面通知与 Claude channel 的实际可用条件见对应章节。未绑定时按返回的 `poll_after_seconds` 或更长间隔调用 `harness_status(job_id)`。结束后用 `harness_result(job_id)` 读取报告。`ready=false` 表示尚无报告。需要分页时保持相同 `page_size`，按该任务返回的 `next_cursor` 继续，不要跨任务复用游标。
+
+### DeepSeek 完成后自动通知 Codex 主对话
+
+需要同时满足可信配置 `[completion] auto_continue=true`、实际工具调用提供有效的 Codex thread/turn 宿主元数据，以及本机正规的 Codex app-tools 通道。绑定前只读预检确认宿主能力和原对话归属，失败时回执 false 与原因，普通模型任务仍可执行。通知目标由宿主上下文固定，不接受工具参数、任务提示或模型报告指定的线程、网址和命令。缺少宿主上下文的连接继续读取原任务；Claude 的独立实验 channel 另按第 4 节启用。
+
+`harness_submit` 和 `harness_session_send` 成功接纳后，检查回执的 `auto_continue`。为 `true` 时，后台在任务进入终态后向原 Codex 主对话发送固定完成通知；即使主 AI 已结束当前回复，也可由宿主启动后续处理。通知包含本机作业与完成事件标识，模型报告和代码仍需从 `harness_result` 读取。完成通知不是模型成功、差异安全或已合入的证明。
+
+| 工具 | 参数与行为 |
+| --- | --- |
+| `harness_watch` | `job_ids`：绑定已接纳或已完成的作业，不重新调用模型；适合恢复已有任务的通知 |
+| `harness_completion_list` | 可选 `state=null`、`limit=20`：只列当前原对话的事件；状态包括 `pending`、`claimed`、`delivered`、`uncertain`、`acknowledged` |
+| `harness_completion_ack` | `event_ids`：完整读取结果、完成复核及必要后续处理后确认对应事件 |
+
+事件 `state="delivered"` 仍须检查 `delivery_status`：Codex 的 `accepted` 表示宿主接受，Claude 的 `channel_written` 只表示写出，二者均不是主 AI 已处理。收到完成事件后先读取同一作业的状态和完整结果；编辑任务仍须符合合入条件。处理结束后再 ack，事件变为 `acknowledged`。失败、取消、超时或中断时读取错误并说明状态，不自动重跑模型或合入部分修改。
+
+Codex 重连同一可信主对话时，可用 `harness_watch` 恢复同一目标的动态通道，不允许改投其他对话；此恢复不适用于重启后换了私有身份的 Claude 前端。若写出通知后连接中断、无法确认接收，事件记为 `uncertain`，后台不盲目重发；原来源仍可访问时用事件列表找回后读取并确认，来源变更时仍可按原 job_id 读取结果。确定未送达的临时通道错误才可退避重试。已验收 Codex 原对话的空闲唤醒、自动结果读取和实际 watch/ack 入口；初始验收绑定来自可信脚本，没有重新提交模型任务，Claude 应用内续跑仍未验收。历史七工具发现或模型任务成功不代替这些检查。
 
 ### 独立 DeepSeek 子会话与并行任务
 
@@ -173,7 +234,7 @@ claude mcp list
 
 | 工具 | 参数及返回 |
 | --- | --- |
-| `harness_session_open` | 必需 `project_id`、`client_request_id`；可选 `title=""`、`mode="review"`、`relative_paths=null`；返回 `session_id` |
+| `harness_session_open` | 必需 `project_id`、`client_request_id`；可选 `title=""`、`mode`（默认取可信 `default_mode`）、`relative_paths=null`；返回 `session_id` |
 | `harness_session_send` | 必需 `session_id`、`prompt`、`client_request_id`；可选 `timeout_seconds`；返回 `job_id` |
 | `harness_session_list` | 可选 `project_id`、`limit=20`；返回项目、标题和近期任务，便于重连后查找原会话 |
 
@@ -222,7 +283,7 @@ max_queue = 5
 
 ## 6. 授权自己的 Git 项目
 
-在所用客户端对应的 `config/*.local.toml` 增加一个项目。例如先只读审查：
+在所用客户端对应的 `config/*.local.toml` 增加一个项目。需要编码委派时一次授权副本编辑：
 
 ```toml
 [projects.my_project]
@@ -230,7 +291,7 @@ path = "D:/Work/my-project"
 allowed_paths = ["src", "tests", "README.md"]
 exclude_patterns = []
 allow_untracked = []
-allow_edits = false
+allow_edits = true
 ```
 
 `project_id` 使用 `my_project`；`path` 必须是该机绝对路径；`allowed_paths` 是项目内的相对文件或目录前缀。工具参数不能自行切换到任意本机目录。共享后台固定启动时的配置，修改授权后请先完成或取消现有任务，关闭使用该配置的全部连接，等待后台空闲退出，再重新连接。仅关闭一个窗口不能替换其他会话正在使用的配置。
@@ -241,7 +302,7 @@ allow_edits = false
 
 ### 允许修改副本
 
-你确认该项目可以参与编码委派后，将这一项目的 `allow_edits` 改为 `true`。按上一段完成共享后台切换，重新连接并核对实时 schema，然后显式使用 `mode="edit"`。配置中的读取范围也是允许修改的范围，新增文件需要授权其父目录。
+项目 `allow_edits=true` 表示允许 DeepSeek 修改该授权范围的任务副本；只读任务显式传 `mode="review"`，不用反复切换权限。若确实要长期禁止此项目编辑，设置 `allow_edits=false`，并只提交 review。修改可信授权本身仍须按上一段切换后台；新 desktop 默认 `default_mode="edit"`，旧配置默认 review，编码可显式使用 `mode="edit"`。配置中的读取范围也是允许修改的范围，新增文件需要授权其父目录。
 
 编辑任务只修改独立副本，不直接改原项目。主 AI 应先确定实现方法、接口、边界和验收条件，再提交明确的一批任务；DeepSeek 在副本写代码，不运行项目测试、程序、安装、构建或 Git。模型完成后，主 AI 读取真实完整差异并验证后才能合入。
 
@@ -270,9 +331,9 @@ if (Test-Path -LiteralPath $delegateDestination) {
 
 ## 7. 任务恢复、取消和常见问题
 
-每次任务都保存 `client_request_id`、完整参数和返回的 `job_id`。响应丢失时使用原编号及完全相同参数恢复；新编号会启动新的模型工作，可能重复计费。改了提示、模式、范围或时限，却继续用旧编号，会触发 `IDEMPOTENCY_CONFLICT`。共享后台统一执行配置中的容量限制，各前端不会各自创建额外执行器绕过这些限制。
+每次任务都保存 `client_request_id`、完整参数、最终模式和返回的 `job_id`。响应丢失时使用原编号及完全相同参数恢复；新编号会启动新的模型工作，可能重复计费。默认模式升级后恢复旧任务应显式传原 `mode="review"`，或直接按旧 job_id 读取，避免将省略模式解释为新的 edit 参数。改了提示、模式、范围或时限，却继续用旧编号，会触发 `IDEMPOTENCY_CONFLICT`。共享后台统一执行配置中的容量限制，各前端不会各自创建额外执行器绕过这些限制。
 
-多会话共享的前提是同一 Windows 用户、同一可信服务配置、同一数据目录，以及匹配的服务代码和解释器。各前端仍是独立 stdio 连接，但请求进入同一个 TaskManager 和 SQLite 历史：相同请求编号和参数返回同一任务，不会因另开窗口再执行一次；一个会话提交后，其他连接到该后台的会话可以按 `job_id` 查询、读取结果或请求取消。共享后台不会区分不同聊天的任务所有者，请仅让应当共享该授权的客户端使用同一配置。
+多会话共享的前提是同一 Windows 用户、同一可信服务配置、同一数据目录，以及匹配的服务代码和解释器。各前端仍是独立 stdio 连接，但请求进入同一个 TaskManager 和 SQLite 历史：相同请求编号和参数返回同一任务，不会因另开窗口再执行一次；一个会话提交后，其他连接到该后台的会话可以按 `job_id` 查询、读取结果或请求取消。任务读取仍共用配置授权，完成事件的通知、列表和确认则绑定原主对话，不能改投其他窗口。
 
 需要停止时调用 `harness_cancel(job_id)`，再查询停止结果。`cancelling` 不是已停止；`termination_failed=true` 表示未确认停止。停止查询、关闭单次等待或断开界面都不等于取消任务。关闭一个前端只断开该会话，其他连接和后台任务继续；最后一个前端断开后，只要有等待或运行任务，后台仍继续工作，无连接且无任务时默认空闲 30 秒后安全退出。停止未确认时后台保留归属和锁并阻止新执行。取消本机进程也不能证明服务商停止计费。服务重启不会自动重放未完成任务，旧任务可能标为 `interrupted`。
 
@@ -296,6 +357,11 @@ if (Test-Path -LiteralPath $delegateDestination) {
 | doctor 成功，模型仍失败 | doctor 是前置检查；另核对 API key 有效性、余额、API 地址、模型名及接口兼容性。查看安全错误，不先换新编号重复提交。 |
 | `PROJECT_NOT_ALLOWED` / `EDIT_NOT_ALLOWED` | 检查所用客户端 TOML 的项目编号和 `allow_edits`，保存后重新连接。Skill 不能绕过服务授权。 |
 | 工具仍没有 `mode` 或编辑参数 | 当前连接可能缓存旧版本。重启 MCP 服务或客户端，再核对实时 schema；不要用 `review` 执行写入。 |
+| `auto_continue=false` 或没有完成通知 | 检查可信 completion 开关、实际 Codex 桌面宿主上下文与本机通道；工具发现本身不证明可唤醒。已接纳任务仍按原 job_id 查询，不重新调用模型。 |
+| 完成事件为 `uncertain` | 通知可能已经被宿主接收，禁止盲目重复发送。原对话用 `harness_completion_list` 找回，读取完整结果并处理后 ack。 |
+| `delivered` 但尚未完成复核 | 检查 delivery_status；Codex accepted 表示宿主接受，Claude channel_written 仅表示写出。继续读取同一 job 的结果、复核和必要验证，处理结束后再 ack。 |
+| Claude `channel_written` 但没有开始后续处理 | 只证明前端写出了消息。核对客户端是否交互启动开发渠道、legacy 协议及组织策略；按原 job_id 读取，不重放模型。 |
+| Claude 前端重启后 watch 报目标冲突 | 新进程有新私有会话身份，不能改投旧绑定。保留原 job_id 查询结果继续处理，不声称 resume 自动恢复通知。 |
 | `EDIT_SECRET_DETECTED` | 副本、修改前文本或差异命中凭证规则，宿主拒绝回传可合并补丁。检查本批范围及测试夹具，保留原作业，不关闭凭证检查来强行导出。 |
 | 文件未进入快照 | 检查是否保存、是否 Git tracked、是否显式列入 `allow_untracked`，以及是否被授权范围或排除规则过滤。 |
 | 快照因旧 Git、链接或文件漂移失败 | 更新支持固定只读命令的 Git，使用普通文件，停止同时修改本批源文件；不要放宽链接和一致性检查。 |
@@ -306,4 +372,4 @@ Windows `desktop` 路线使用独立副本和受监管进程，但没有操作�
 
 ## 命令核对范围
 
-本教程的服务参数和工具契约面向 0.3.2。既有 CLI 注册格式在 0.3.1 编写时以 `codex mcp add --help`、`codex mcp list --help`、`claude mcp add-json --help` 和 `claude mcp list --help` 核对，使用的客户端版本为 Codex CLI `0.162.0-alpha.17.2`、Claude Code `2.1.273`；该历史检查不代替 0.3.2 多会话验收。客户端升级后如提示参数变化，以该机 `--help` 和官方文档为准。安装依赖、doctor、工具发现、多会话生命周期和真实模型调用应分别确认，验收结果以相应版本的验证记录为准。
+本教程的服务参数和工具契约面向 0.3.3；通知与宿主工具入口的分项验收见 [验证记录](VALIDATION.md)，Claude 应用内续跑仍未验证。既有 CLI 注册格式在 0.3.1 编写时以 `codex mcp add --help`、`codex mcp list --help`、`claude mcp add-json --help` 和 `claude mcp list --help` 核对，使用的客户端版本为 Codex CLI `0.162.0-alpha.17.2`、Claude Code `2.1.273`；历史工具发现、多会话和模型成功不代替自动续跑验收。客户端升级后如提示参数变化，以该机 `--help` 和官方文档为准。安装依赖、doctor、工具发现、多会话生命周期、真实模型调用、通知送达和主 AI 处理确认应分别验证。

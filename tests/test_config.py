@@ -46,10 +46,15 @@ def test_config_relative_state_and_absolute_project_with_defaults(tmp_path):
     assert loaded.limits.max_parallel_jobs == 3
     assert loaded.limits.default_timeout_seconds == 600
     assert loaded.executor.backend == "desktop"
+    assert loaded.default_mode == "review"
+    assert loaded.completion.auto_continue is False
 
 
 @pytest.mark.parametrize("section,field,value", [
     (None, "unsupported", 1), ("limits", "unknown", 1),
+    (None, "default_mode", "write"), (None, "default_mode", True),
+    ("completion", "unknown", True), ("completion", "auto_continue", "true"),
+    ("completion", "auto_continue", 1), ("completion", "auto_continue", []),
     ("limits", "max_queue", 0), ("limits", "max_queue", 6),
     ("limits", "max_parallel_jobs", 0), ("limits", "max_parallel_jobs", 9), ("limits", "max_parallel_jobs", True),
     ("limits", "max_timeout_seconds", True), ("limits", "default_timeout_seconds", 1801),
@@ -169,7 +174,7 @@ def test_edit_permission_is_trusted_project_setting(config):
     assert exc.value.code == "EDIT_BACKEND_UNSUPPORTED"
 
 
-@pytest.mark.parametrize("mode", ["write", "EDIT", "", None, True, 1])
+@pytest.mark.parametrize("mode", ["write", "EDIT", "", True, 1])
 def test_unknown_edit_modes_rejected(config, mode):
     with pytest.raises(HarnessError) as exc:
         normalize_request(config, "demo", "read", "one", mode=mode)
@@ -187,6 +192,36 @@ def test_review_fingerprint_preserves_legacy_replay(config):
 def test_edit_permission_requires_bool_in_local_configuration(tmp_path, value):
     path = write_config(tmp_path)
     path.write_text(path.read_text(encoding="utf-8") + '\nallow_edits = ' + value, encoding="utf-8")
+    with pytest.raises(HarnessError) as exc:
+        load_config(path)
+    assert exc.value.code == "INVALID_CONFIG"
+
+
+def test_trusted_default_edit_requires_project_permission_and_allows_review(config):
+    configured = replace(config, default_mode="edit")
+    with pytest.raises(HarnessError) as exc:
+        normalize_request(configured, "demo", "fix", "default-edit")
+    assert exc.value.code == "EDIT_NOT_ALLOWED"
+    configured = replace(configured, projects={"demo": replace(config.projects["demo"], allow_edits=True)})
+    request = normalize_request(configured, "demo", "fix", "default-edit")
+    assert request["mode"] == "edit"
+    assert request_fingerprint(request) == request_fingerprint(normalize_request(configured, "demo", "fix", "default-edit", mode="edit"))
+    assert normalize_request(configured, "demo", "read", "explicit-review", mode="review")["mode"] == "review"
+
+
+def test_load_trusted_desktop_default_and_completion_configuration(tmp_path):
+    path = write_config(tmp_path, None, "default_mode", "edit")
+    path.write_text(path.read_text(encoding="utf-8") + '\nallow_edits = true\n\n[completion]\nauto_continue = true\n', encoding="utf-8")
+    configured = load_config(path)
+    assert configured.default_mode == "edit"
+    assert configured.completion.auto_continue is True
+    assert normalize_request(configured, "demo", "fix", "desktop-default")["mode"] == "edit"
+
+
+def test_docker_default_stays_review_and_rejects_unsupported_edit_default(tmp_path):
+    path = write_config(tmp_path, "executor", "backend", "docker")
+    assert load_config(path).default_mode == "review"
+    path.write_text('default_mode = "edit"\n' + path.read_text(encoding="utf-8"), encoding="utf-8")
     with pytest.raises(HarnessError) as exc:
         load_config(path)
     assert exc.value.code == "INVALID_CONFIG"

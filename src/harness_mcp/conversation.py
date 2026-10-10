@@ -61,10 +61,11 @@ class SessionManager(ParallelTaskManager):
             ).fetchall()
             return [self.store._decode(row) for row in rows]
 
-    async def session_open(self, project_id, client_request_id, title="", mode="review", relative_paths=None):
+    async def session_open(self, project_id, client_request_id, title="", mode=None, relative_paths=None):
         if not self.accepting:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭，不再接受新会话。")
         validated = normalize_request(self.config, project_id, "创建子代理会话", client_request_id, relative_paths, None, mode)
+        mode = validated["mode"]
         if not isinstance(title, str) or len(title) > 200 or any(ord(char) < 32 for char in title):
             raise HarnessError("INVALID_SESSION_TITLE", "会话标题须为不超过200字的单行文本。")
         binding = {"mode": mode, "relative_paths": validated["relative_paths"], "execution": _execution(self.config, project_id)}
@@ -100,7 +101,7 @@ class SessionManager(ParallelTaskManager):
         # 先挑选最近轮次，再恢复时间顺序；仅保存已导出文本，绝不保存reasoning。
         return redact_value(list(reversed(context)), self.secrets)
 
-    async def session_send(self, session_id, prompt, client_request_id, timeout_seconds=None):
+    async def session_send(self, session_id, prompt, client_request_id, timeout_seconds=None, *, completion_origin=None):
         if not self.accepting:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭，不再接受新任务。")
         session = self._session(session_id)
@@ -117,21 +118,23 @@ class SessionManager(ParallelTaskManager):
             if existing is not None:
                 if existing["fingerprint"] != fingerprint:
                     raise HarnessError("IDEMPOTENCY_CONFLICT", "同一请求编号已经绑定了不同的任务参数。")
-                return {**self._receipt(self.store._decode(existing)), "idempotent_replay": True}
+                if completion_origin is not None:
+                    self.store.bind_completion(existing["job_id"], self._accepted_origin(completion_origin))
+                return {**self._with_completion(self._receipt(self.store._decode(existing))), "idempotent_replay": True, "auto_continue": completion_origin is not None}
             pending = self.store.connection.execute("SELECT 1 FROM jobs WHERE json_extract(request_json,'$.session_id')=? AND status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')", (session_id,)).fetchone()
         if pending:
             raise HarnessError("SESSION_BUSY", "该子代理仍有任务未结束，请查询或取消原任务后继续对话。")
         request["conversation_context"] = self._context(session_id)
         # 到入库之前没有await，因此同一事件循环上的并发send不能交叉接纳两轮。
-        job, created = self.store.submit_parallel(request, fingerprint, binding["execution"], self.config.limits.max_queue, self.config.limits.max_parallel_jobs)
+        job, created = self.store.submit_parallel(request, fingerprint, binding["execution"], self.config.limits.max_queue, self.config.limits.max_parallel_jobs, completion_origin=self._accepted_origin(completion_origin))
         self.wakeup.set()
-        return {**self._receipt(job), "idempotent_replay": not created}
+        return {**self._with_completion(self._receipt(job)), "idempotent_replay": not created, "auto_continue": completion_origin is not None}
 
-    async def submit(self, project_id, prompt, client_request_id, relative_paths=None, timeout_seconds=None, mode="review"):
+    async def submit(self, project_id, prompt, client_request_id, relative_paths=None, timeout_seconds=None, mode=None, *, completion_origin=None):
         with self.store._lock:
             if self.store.connection.execute("SELECT 1 FROM agent_sessions WHERE client_request_id=?", (client_request_id,)).fetchone():
                 raise HarnessError("IDEMPOTENCY_CONFLICT", "该请求编号已用于创建会话，不能再提交任务。")
-        return await super().submit(project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
+        return await super().submit(project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode, completion_origin=completion_origin)
 
     def session_list(self, project_id=None, limit=20):
         if project_id is not None and project_id not in self.config.projects:

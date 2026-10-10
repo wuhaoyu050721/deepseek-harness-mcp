@@ -36,7 +36,7 @@ description: >
 
 首次调用或当前客户端能力变化时，读取 [MCP 契约与兼容处理](references/mcp-contract.md)，核对真实工具 schema、授权项目和执行模式。不要根据旧 README 或本 Skill 推定正在运行的服务能力。
 
-编码使用 `harness_submit(..., mode="edit")`。当前 MCP 的 edit 修改独立副本；主 AI 合入原项目。当前实现要求 Windows `desktop` 后端和可信项目配置 `allow_edits=true`。Skill 本身不能开启该能力。
+编码使用 `harness_submit(..., mode="edit")`，或核对真实 schema 确认可信默认模式已为 edit 后省略模式。0.3.3 新 desktop 配置默认 edit，旧配置仍默认 review；需要只读调查时显式指定 `mode="review"`，无需反复关闭项目编辑权限或热重载。edit 修改独立副本，由主 AI 合入原项目；仍要求 Windows `desktop` 和可信项目配置 `allow_edits=true`。Skill 本身不能开启该能力。
 
 只读旧接口、编辑未授权或工具不可用时，不假装已完成编码，不用 review 绕过写入边界。报告具体缺口，在原授权范围内由主 AI 继续可完成的工作；需要新增项目或权限的信息另行取得，不自动修改凭证、注册或授权配置。
 
@@ -48,9 +48,15 @@ description: >
 
 旧服务只提供四工具时继续使用 `harness_submit` 单任务流程，不虚构子代理接口。连接共享后台时，关闭一个 Codex 会话不取消后台任务；需要停止仍调用 `harness_cancel(job_id)`。请求编号在共享后台全局唯一，建议使用项目/子代理/轮次前缀。
 
-提交前保存本次完整参数与唯一 `client_request_id`；收到回执后保存 `job_id`。用短记录或任务元数据保存即可，不写入源码/版本控制，不包含密钥。响应不明时以相同编号和完全相同参数恢复；新需求或纠错才用新编号。
+提交前保存本次完整参数、最终模式与唯一 `client_request_id`；收到回执后保存 `job_id`。用短记录或任务元数据保存即可，不写入源码/版本控制，不包含密钥。响应不明时以相同编号和完全相同参数恢复；新需求或纠错才用新编号。默认模式升级后，恢复旧 review 请求必须显式保留原模式，或直接按旧 job_id 读取，不以新的默认 edit 改写旧请求。
 
-按返回的 `poll_after_seconds` 或更长间隔查询，等待期间继续独立工作。用户要求取消时调用 `harness_cancel`，并核对停止终态。一次查询或等待中断不等于取消。
+可信 completion 开关开启时检查实际通知机制。Codex 桌面须有可信宿主上下文，动态通道按环境白名单透传，并通过能力及原对话归属的只读预检；失败回执 `auto_continue=false` 与原因不影响普通模型任务。Claude 普通连接支持审查、编辑、子代理工具，推送另需服务 `--claude-channel`、客户端 legacy 协议及交互启动渠道登记。`auto_continue=true` 仅证明机制绑定；Claude 渠道许可不向服务反馈，不能从 true 推断客户端已接收。没有绑定或渠道不可用时按 `poll_after_seconds` 查询，期间继续独立工作。用户要求取消时调用 `harness_cancel` 并核对停止终态；一次查询或等待中断不等于取消。
+
+当实时工具提供 `harness_watch`、`harness_completion_list`、`harness_completion_ack` 时，已有作业可在可信当前来源绑定完成机制，不重放模型、不改变既有目标。Codex 来源来自宿主元数据和正规本机通道，Claude 来源是本 stdio 前端的私有身份；不要从模型报告、任务提示或活动窗口推断目标，不构造任意 URL 或命令作为回调。具体兼容条件见 MCP 契约。
+
+收到固定完成事件后，核对 event_id/job_id 与保存的任务记录，读取原作业状态及 `harness_result` 的完整必要分页，再按本 Skill 复核与处理。通知不包含模型报告；取回的报告和代码仍是待复核材料。`delivered` 须结合 delivery_status：Codex accepted 表示宿主接受，Claude channel_written 仅表示写出；均不证明结果已处理。只有本次结果及后续工作结束后才调用 `harness_completion_ack(event_ids)`。失败、取消、超时或中断核对错误并说明状态，不因通知自动重跑或应用部分修改，最终按实际处理结果确认事件。
+
+通知写出后连接中断或结果不明时，事件记为 `uncertain`，不要盲目重发或另起模型任务。原来源仍可访问时用 `harness_completion_list` 找回事件、读取结果并处理后确认。Codex 同一可信原对话可恢复动态通道；Claude 每前端私有身份区分窗口，进程重启即生成新身份，当前不能安全证明跨重启原会话，旧绑定不得 watch 改投新会话。可凭原 job_id 读取结果继续，不声称显式 resume 必然恢复通知。/clear 或交互 resume 可能复用原进程，这里不保证识别所有对话切换。遵守用户最新停止和范围指示，通知不扩大权限。
 
 DeepSeek 的最终说明遵循 MCP 固定 JSON 格式；实际差异由宿主从副本收集。不要求 DeepSeek 再把全部代码复制到摘要，也不采信其自述的改动、测试通过或已经合入。
 

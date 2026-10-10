@@ -85,6 +85,23 @@ class ServerContractTests(unittest.IsolatedAsyncioTestCase):
         await server.call_tool("harness_session_list", {"project_id": "demo"})
         proxy.session_list.assert_awaited_once_with("demo", 20)
 
+    async def test_desktop_default_edit_schema_dispatch_and_explicit_review(self):
+        proxy = MagicMock()
+        proxy.secrets = []
+        proxy.submit = AsyncMock(return_value={"job_id": "default-edit"})
+        proxy.session_open = AsyncMock(return_value={"session_id": "default-agent"})
+        server = create_server(AppConfig(Path("unused-default-edit"), default_mode="edit"), manager=proxy, sessions=True)
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        for name in ("harness_submit", "harness_session_open"):
+            self.assertEqual(tools[name].input_schema["properties"]["mode"]["default"], "edit")
+            self.assertEqual(tools[name].input_schema["properties"]["mode"]["enum"], ["review", "edit"])
+        await server.call_tool("harness_submit", {"project_id": "demo", "prompt": "fix", "client_request_id": "default-one"})
+        proxy.submit.assert_awaited_once_with("demo", "fix", "default-one", None, None, "edit")
+        await server.call_tool("harness_session_open", {"project_id": "demo", "client_request_id": "default-open"})
+        proxy.session_open.assert_awaited_once_with("demo", "default-open", "", "edit", None)
+        await server.call_tool("harness_submit", {"project_id": "demo", "prompt": "read", "client_request_id": "review-one", "mode": "review"})
+        proxy.submit.assert_awaited_with("demo", "read", "review-one", None, None, "review")
+
 
 if __name__ == "__main__":
     unittest.main()

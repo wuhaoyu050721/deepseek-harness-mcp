@@ -1,3 +1,19 @@
+# 0.3.3 版本说明
+
+本次增加任务完成后通知原 Codex 主对话、可选 Claude Code 实验 channel 的续跑链路，以及可信默认编辑模式。完整回归761项测试和57个子测试、全新源码包安装、三前端通道传输与隔离均通过。既有报告的真实 Codex 空闲唤醒和自动读取已通过；首次本机确认后，原对话又通过实际 MCP 来源捕获、watch 和幂等 ack 验证了完成工具入口。没有提交新模型任务；Claude 应用内续跑仍未验收。详细范围见 [验证记录](VALIDATION.md)。
+
+可信 `[completion] auto_continue=true` 开启完成机制。Codex 需有效桌面 thread/turn 宿主元数据和正规本机通道，并先通过能力及归属的只读预检。宿主缺少能力时返回 auto_continue=false 与原因，普通模型任务仍正常接纳；客户端通过 env_vars 透传 CODEX_APP_TOOLS_PIPE_PATH，不硬编码动态句柄。旧配置及没有上下文的连接继续查询状态与结果。
+
+Claude 普通连接支持审查、编辑及子代理七/十工具；实验推送另需 `--claude-channel`、legacy 协议和交互启动的开发渠道登记。新增 examples/claude.channel.local.json，普通 claude.local.json 不带 channel 参数。auto_continue=true 仅表示机制绑定，Claude 不反馈渠道许可；channel_written 只证明 stdio 写出，ack 才记录完整处理。每前端私有身份区分窗口，进程重启产生新身份，旧绑定不能 watch 改投新会话；原 job_id 可继续读取，不承诺 resume 自动恢复通知。
+
+作业终态与唯一完成事件在同一数据库事务保存。后台发送固定作业/事件标识和状态，让主 AI 读取 `harness_result` 再复核、合入及验证；模型报告不直接组成续跑指令，失败或取消不自动重新执行或应用部分修改。来源目标不可改投，重连原对话可更新本机通道。
+
+启用功能时新增 `harness_watch(job_ids)`、`harness_completion_list(state=None, limit=20)` 和 `harness_completion_ack(event_ids)`；共享模式共十工具，未启用仍七工具。watch 可绑定尚无来源的旧作业或恢复相同来源，不重放模型、不变更已绑定目标。delivered 须结合 delivery_status 判断 Codex 接受或 Claude 写出，完整处理另由 acknowledged 记录；写后断连或结果不明记为 uncertain，不盲重发。主 AI 完整处理结果后再 ack。
+
+可信根字段 `default_mode` 决定 submit/session_open 真实 schema 的默认模式。新 Windows desktop 初始化配置为 edit，登记项目 allow_edits=true，并开启完成通知；旧配置缺省仍为 review、自动续跑 false。显式 `mode="review"` 可只读审查，无须反复关闭编辑权限或重载。edit 始终只修改独立副本，原项目仍由主 AI 复核和验证后合入。Docker 不接受默认编辑。
+
+升级不覆盖已有本机配置。按现有生命周期完成或取消旧任务、关闭旧连接并切换后台后加载新工具；保留原数据目录和历史。改变默认模式后，原 review 请求使用显式原模式恢复，或直接按原 job_id 读取，避免以新的默认模式重用旧请求编号。历史任务不会批量自动唤醒，需在原对话明确 watch。
+
 # 0.3.2 版本说明
 
 0.3.2 增加 `--shared` 本机共享连接。客户端仍通过 stdio 启动前端；多个连接复用同一个持锁的后台 TaskManager、SQLite、请求编号和历史，避免第二个客户端因相同数据目录被占用而在 MCP 初始化前退出。

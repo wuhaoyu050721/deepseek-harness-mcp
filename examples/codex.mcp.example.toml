@@ -4,7 +4,8 @@
 command = "D:/Tools/deepseek-harness-mcp/.venv/Scripts/python.exe"
 args = ["-m", "harness_mcp.server", "--shared", "--config", "D:/Tools/deepseek-harness-mcp/config/codex.local.toml"]
 cwd = "D:/Tools/deepseek-harness-mcp"
+env_vars = ["CODEX_APP_TOOLS_PIPE_PATH"]
 startup_timeout_sec = 30
 tool_timeout_sec = 30
 # 仅在服务配置 credential_source="env" 时需要：
-# env_vars = ["DEEPSEEK_API_KEY"]
+# env_vars = ["CODEX_APP_TOOLS_PIPE_PATH", "DEEPSEEK_API_KEY"]

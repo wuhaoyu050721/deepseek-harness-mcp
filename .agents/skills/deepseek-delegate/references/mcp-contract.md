@@ -10,10 +10,13 @@
 | `harness_status` | `job_id` | 查询状态、阶段、耗时、错误、停止失败情况 |
 | `harness_result` | `job_id`，可选 `cursor`、`page_size` | 分页读取已保存报告；`ready=false` 表示尚无报告 |
 | `harness_cancel` | `job_id` | 请求取消；确认执行器停止后才进入停止终态 |
+| `harness_watch` | `job_ids` | 开启自动续跑时，将已接纳/已完成作业绑定原主对话，不重放模型 |
+| `harness_completion_list` | 可选 `state=null`、`limit=20` | 开启自动续跑时，只列当前原对话的完成事件 |
+| `harness_completion_ack` | `event_ids` | 开启自动续跑时，完整处理结果后确认事件 |
 
 客户端可能加 `mcp__deepseek_harness__` 等命名空间，使用实际名称。
 
-`mode` 默认为 `review`，编码必须显式指定 `edit`。只有 `review/edit` 两种模式；没有 `write_paths`、`patch_pages`、自动合入或让执行器运行项目测试的参数。
+`mode` 的真实 schema 默认值取可信根字段 `default_mode`。0.3.3 新 desktop 配置为 edit，旧配置缺省仍为 review；编码可显式指定 edit，只读调查显式指定 review。只有 `review/edit` 两种模式；没有 `write_paths`、`patch_pages`、自动合入或让执行器运行项目测试的参数。Docker 不接受默认编辑，编辑默认本身不代替项目 allow_edits 授权。
 
 提交示例，值应替换为已确认的授权项目和本次任务书，不要把示例原样作为真实任务：
 
@@ -41,17 +44,19 @@
 ## 生命周期与重试
 
 1. 保存提交参数与 `client_request_id`，收到回执保存 `job_id`。
-2. 查询同一 job；按 `poll_after_seconds` 或更长间隔等待。直接模式保持一个执行位置；共享模式默认三个（可信配置1–8）和最多五个等待位置。同一会话按轮次顺序执行，互不依赖的子代理会话才可并行。
+2. 回执 `auto_continue=true` 表示机制绑定，可继续独立工作；实际收到完成事件后才进入结果处理，不把 true 当作通知已被接收。没有绑定或渠道不可用时查询同一 job，按 `poll_after_seconds` 或更长间隔等待。直接模式保持一个执行位置；共享模式默认三个（可信配置1–8）和最多五个等待位置。同一会话按轮次顺序执行，互不依赖的子代理会话才可并行。
 3. `succeeded/failed/cancelled/timed_out/interrupted` 是终态；`cancelling` 尚未确认停止，`termination_failed=true` 不能当作取消成功。
 4. 响应丢失时，用原 ID、原参数恢复。新 ID 会启动新模型工作，可能重复计费。修改提示、模式、范围或超时而复用原 ID 会出现 `IDEMPOTENCY_CONFLICT`。
 5. 服务重启不会重放旧未完成任务，可能记为 `interrupted`；明确需要重新执行时，使用新的 ID。
 6. 用户要求停止时调用 `harness_cancel`，再查询停止结果。取消本地执行器不能证明上游停止计费。
 
+改变可信默认模式后，旧 review 请求的恢复参数必须显式包含原 `mode="review"`，或直接读取已有 job_id；不要让新的默认 edit 改变旧请求指纹。
+
 ## 共享连接与子代理会话
 
-0.3.2 的 `--shared` 保留原四个任务工具，并增加以下三工具；只有实时schema确认存在才使用：
+0.3.2 及更新版本的 `--shared` 保留原四个任务工具，并增加以下三工具；只有实时schema确认存在才使用：
 
-- `harness_session_open(project_id, client_request_id, title="", mode="review", relative_paths=None)`：创建固定项目/模式/范围的会话，返回 `session_id`，不调用模型。
+- `harness_session_open(project_id, client_request_id, title="", mode=可信default_mode, relative_paths=None)`：创建固定项目/模式/范围的会话，返回 `session_id`，不调用模型；此处的默认值以实际 schema 为准。
 - `harness_session_send(session_id, prompt, client_request_id, timeout_seconds=None)`：初次任务或继续追问，返回 `job_id`，之后复用原状态/结果/取消工具。
 - `harness_session_list(project_id=None, limit=20)`：找回会话和近期任务编号，不自动重放。
 
@@ -60,6 +65,22 @@
 共享后台在无连接但仍有未完成任务时继续运行；无连接且无任务30秒后退出。前端退出不触发取消。旧直接实例占用同一 `data_dir` 时，先结束旧连接后重连；不能删锁、清空历史或换随机目录绕过归属检查。变更可信权限/路由/实现会拒绝静默复用旧后台，等待原任务完成并空闲退出后重连。
 
 会话上下文由本机最近四轮脱敏报告重建，最多16000字符；不保留模型reasoning。每轮从当前授权源码生成新的副本，上一轮未合入的编辑不会自动传给下一轮。主 AI 须按实际差异合入并验证，再提交依赖该修改的任务。
+
+## 完成事件与自动续跑
+
+0.3.3 在可信 `[completion] auto_continue=true` 时发现 watch/list/ack 三个完成事件工具，共享模式合计十工具；未开启时仍七工具，旧配置缺省 false。`auto_continue=true` 仅表示当前客户端完成机制已绑定，不证明宿主接收或主 AI 已处理。Codex thread/turn 元数据及动态本机 app-tools 通道须通过宿主能力/归属只读预检；失败返回 false 与 auto_continue_reason，普通模型任务仍接纳。CODEX_APP_TOOLS_PIPE_PATH 按客户端 env_vars 白名单透传，不硬编码路径。
+
+普通 Claude 使用全部已启用审查、编辑、子代理工具，不因缺少通知能力退化为只读。实验 channel 另需服务 `--claude-channel`、客户端 `MCP_PROTOCOL_NEGOTIATION=legacy` 和交互启动 `--dangerously-load-development-channels server:deepseek_harness`。服务声明实验 claude/channel capability，使用官方通知格式；宿主不反馈渠道许可，绑定 true 不等于渠道已登记。[Claude Channels 参考](https://code.claude.com/docs/en/channels-reference)、[协议说明](https://code.claude.com/docs/en/mcp#push-messages-with-channels)
+
+- `harness_watch(job_ids)`：为已接纳或已完成作业绑定可信当前来源；不调用模型、不改变既有目标。Codex 同源可刷新动态通道；Claude 新进程不是原私有 session，旧绑定不能改投。
+- `harness_completion_list(state=None, limit=20)`：只列实际当前原对话的事件；筛选值为 `pending/claimed/delivered/uncertain/acknowledged`。
+- `harness_completion_ack(event_ids)`：结果完整读取、复核和必要后续工作处理结束后确认事件；同源确认幂等，不能替另一主对话确认。
+
+接纳、来源绑定、终态与完成事件使用事务保存；没有授权绑定的旧作业不会因升级被批量唤醒。每个已绑定作业只有一个完成事件。后台向原主对话发送固定作业、事件、模式和终态标识，让主 AI 通过 `harness_result` 读取报告；不把用户提示、模型报告或代码插入唤醒指令，不接受任意 URL、命令或目标聊天参数。
+
+delivered 须结合 delivery_status：Codex accepted 表示宿主接受，Claude channel_written 只表示 stdio 写出，不能证明 Claude 已接收；均不能证明主 AI 已处理或合入。acknowledged 才记录结果处理确认。收到事件后核对原任务，读取完整必要分页并按下文检查。失败、取消、超时或中断只核对状态与错误，不因完成通知自动重跑模型或应用部分修改，处理结束后仍可确认事件。
+
+确定未写出的临时错误允许退避重试；写后断连或结果不明时记为 uncertain，不盲目重发。原来源仍可访问时通过事件列表读取并处理后 ack。Claude 前端使用私有 connection/session 标识路由窗口，服务 session 不是 Claude 真实会话编号；进程重启生成新身份，当前没有安全跨重启证明，旧绑定不能通过 watch 改投。原 job_id 仍可读结果继续，不声称显式 resume 必然恢复通知。/clear 或交互 resume 可能沿用 MCP 进程，当前仅保证窗口/连接路由。不得为修复通知重新提交模型、转移目标或覆盖用户最新限制。Codex 原生空闲唤醒及自动读取、Claude 实际传输隔离已经验收；Codex 首次确认使用本机存储，随后原对话通过真实来源捕获、watch 和幂等 ack 工具验证了完成入口。初始绑定来自可信验收脚本，没有重新提交模型任务；Claude 应用内续跑仍未验收，历史模型和七工具发现不代替这些检查。
 
 ## 编辑结果与分页
 

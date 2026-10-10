@@ -218,26 +218,54 @@ class TaskManager:
             value["session_id"] = job["request"]["session_id"]
         return value
 
-    async def submit(self, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str = "review") -> dict:
+    def _accepted_origin(self, origin):
+        if origin is not None and not self.config.completion.auto_continue:
+            raise HarnessError("AUTO_CONTINUE_NOT_AUTHORIZED", "可信配置没有授权完成后自动继续。")
+        return origin
+
+    def _with_completion(self, value):
+        from .completion import public_event
+        event = self.store.completion_get(value["job_id"])
+        if event is not None:
+            value = {**value, "completion": public_event(event)}
+        return value
+
+    def completion_watch(self, job_ids, origin):
+        from .completion import watch
+        return watch(self, job_ids, origin)
+
+    def completion_list(self, origin, state=None, limit=20):
+        from .completion import public_event
+        if origin is None:
+            raise HarnessError("AUTO_CONTINUE_UNAVAILABLE", "缺少当前主对话的可信归属。")
+        from .job_store import JobStore
+        destination_id, host_namespace = JobStore.get_origin_identity(origin)
+        return {"events": [public_event(value) for value in self.store.completion_list(destination_id, host_id=host_namespace, state=state, limit=limit)]}
+
+    def completion_ack(self, event_ids, origin):
+        from .completion import acknowledge
+        return acknowledge(self, event_ids, origin)
+
+    async def submit(self, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str | None = None, *, completion_origin=None) -> dict:
         if not self.accepting:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭，不再接受新任务。")
         request = normalize_request(self.config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
-        job, created = self.store.submit(request, request_fingerprint(request), frozen_execution(self.config, project_id), self.config.limits.max_queue)
+        job, created = self.store.submit(request, request_fingerprint(request), frozen_execution(self.config, project_id), self.config.limits.max_queue, completion_origin=self._accepted_origin(completion_origin))
         self.wakeup.set()
-        return {**self._receipt(job), "idempotent_replay":not created}
+        return {**self._with_completion(self._receipt(job)), "idempotent_replay":not created, "auto_continue": completion_origin is not None}
 
     def status(self, job_id: str) -> dict:
         job = self.store.get(job_id)
         now = job["finished_at"] or time.time()
-        return {**self._receipt(job),"phase":job["phase"],"elapsed_seconds":round(max(0,now-(job["started_at"] or job["created_at"])),3),"last_activity_at":job["last_activity_at"],"error":redact_value(job["error"],self.secrets),"termination_failed":job["termination_failed"]}
+        return self._with_completion({**self._receipt(job),"phase":job["phase"],"elapsed_seconds":round(max(0,now-(job["started_at"] or job["created_at"])),3),"last_activity_at":job["last_activity_at"],"error":redact_value(job["error"],self.secrets),"termination_failed":job["termination_failed"]})
 
     def result(self, job_id: str, cursor=None, page_size=20) -> dict:
         from .report import read_report, paginate_report
         job = self.store.get(job_id)
         if not job["report_id"]:
-            return {"job_id":job_id,"status":job["status"],"ready":False,"error":redact_value(job["error"],self.secrets),"poll_after_seconds":1 if job["status"] not in TERMINAL else 0}
+            return self._with_completion({"job_id":job_id,"status":job["status"],"ready":False,"error":redact_value(job["error"],self.secrets),"poll_after_seconds":1 if job["status"] not in TERMINAL else 0})
         report = read_report(self.config.data_dir / "jobs" / job_id, max_bytes=max(2*1024*1024,self.config.limits.max_output_bytes*3),expected_report_id=job["report_id"])
-        return redact_value({"ready":True,"status":job["status"],**paginate_report(report,job_id,cursor,page_size)},self.secrets)
+        return redact_value(self._with_completion({"ready":True,"status":job["status"],**paginate_report(report,job_id,cursor,page_size)}),self.secrets)
 
     async def cancel(self, job_id: str) -> dict:
         job = self.store.request_cancel(job_id)

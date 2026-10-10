@@ -1,5 +1,11 @@
 # 复制到 config/*.local.toml 后按本机绝对路径修改。不要填明文密钥。
 data_dir = "../data/codex"
+# Windows desktop 的新任务默认修改独立副本；旧配置未设置此字段时仍默认 review。
+default_mode = "edit"
+
+[completion]
+# 任务完成后由可信宿主上下文通知原 Codex 对话继续处理。
+auto_continue = true
 
 [model]
 provider = "deepseek-official"
@@ -35,5 +41,5 @@ path = "C:/absolute/path/to/an/authorized/git/project"
 allowed_paths = ["src", "README.md"]
 exclude_patterns = []
 allow_untracked = []
-# 默认仅允许审查；本机明确授权修改后设为 true。修改仅作用于任务副本。
-allow_edits = false
+# 本机授权修改该项目的任务副本；主 AI 复核差异后才合入原项目。
+allow_edits = true

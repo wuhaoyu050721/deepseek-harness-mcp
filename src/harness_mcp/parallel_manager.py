@@ -101,14 +101,14 @@ class ParallelTaskManager(TaskManager):
             and not any(context.ownership_failed for context in self.contexts.values())
         )
 
-    async def submit(self, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str = "review") -> dict:
+    async def submit(self, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str | None = None, *, completion_origin=None) -> dict:
         if not self.accepting:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭或确认旧执行停止，不再接受新任务。")
         request = normalize_request(self.config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
         job, created = self.store.submit_parallel(request, request_fingerprint(request), frozen_execution(self.config, project_id),
-                                                 self.config.limits.max_queue, self.config.limits.max_parallel_jobs)
+                                                 self.config.limits.max_queue, self.config.limits.max_parallel_jobs, completion_origin=self._accepted_origin(completion_origin))
         self.wakeup.set()
-        return {**self._receipt(job), "idempotent_replay": not created}
+        return {**self._with_completion(self._receipt(job)), "idempotent_replay": not created, "auto_continue": completion_origin is not None}
 
     async def _finish_context(self, job_id: str, context: _ExecutionContext) -> bool:
         task = context.execution_task

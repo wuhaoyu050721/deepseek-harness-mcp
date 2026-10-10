@@ -1,6 +1,7 @@
 """在独立临时目录验证源码 ZIP 的初始化，不接触用户本机配置。"""
 
 from pathlib import Path
+import json
 import shutil
 import subprocess
 import sys
@@ -64,6 +65,9 @@ def test_source_zip_initializes_only_sample_and_absolute_codex_paths(release_roo
         assert set(config["projects"]) == {"sample"}
         assert config["projects"]["sample"]["path"] == sample.as_posix()
         assert config["projects"]["sample"]["allow_untracked"] == []
+        assert config["projects"]["sample"]["allow_edits"] is True
+        assert config["default_mode"] == "edit"
+        assert config["completion"]["auto_continue"] is True
         assert config["data_dir"] == (release_root / "data" / client).as_posix()
         assert config["model"]["credential_source"] == "desktop_store"
         assert "api_key" not in config["model"]
@@ -73,6 +77,11 @@ def test_source_zip_initializes_only_sample_and_absolute_codex_paths(release_roo
     assert Path(server["command"]).is_absolute()
     assert server["args"][-1] == str(release_root / "config" / "codex.local.toml")
     assert "--shared" in server["args"]
+    assert server["env_vars"] == ["CODEX_APP_TOOLS_PIPE_PATH"]
+    normal = json.loads((release_root / "examples/claude.local.json").read_text(encoding="utf-8"))
+    channel = json.loads((release_root / "examples/claude.channel.local.json").read_text(encoding="utf-8"))
+    assert "--claude-channel" not in normal["mcpServers"]["deepseek_harness"]["args"]
+    assert channel["mcpServers"]["deepseek_harness"]["args"] == normal["mcpServers"]["deepseek_harness"]["args"] + ["--claude-channel"]
 
 
 def test_repeat_setup_preserves_existing_configs_snippets_and_sample(release_root: Path) -> None:
@@ -121,3 +130,4 @@ def test_git_root_keeps_scopes_and_only_authorizes_listed_untracked_files(releas
         assert project["path"] == release_root.as_posix()
         assert project["allowed_paths"] == ["src", "tests", "scripts", "docs", "README.md", "pyproject.toml", "worker-requirements.lock"]
         assert project["allow_untracked"] == ["scripts/setup_local.py", "src/new.py"]
+        assert project["allow_edits"] is True

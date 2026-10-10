@@ -30,10 +30,10 @@ def average(values):
 def withdraw(balance, amount):
     return balance - amount
 ''',encoding="utf-8")
-        (sample / "README.md").write_text("# 人工示例仓库\n\n只读审查 calculator.py，关注空列表和负数金额边界。不要运行命令或修改源文件。\n",encoding="utf-8")
+        (sample / "README.md").write_text("# 人工示例仓库\n\n按任务要求审查或修改 calculator.py，关注空列表和负数金额边界。修改只作用于独立任务副本，原项目由主 AI 复核后合入；不要运行命令。\n",encoding="utf-8")
         subprocess.run(["git","init","-q",str(sample)],check=True)
         subprocess.run(["git","-C",str(sample),"add","calculator.py","README.md"],check=True)
-        subprocess.run(["git","-c","user.name=MCP Sample","-c","user.email=sample@localhost","-c","core.hooksPath=/dev/null","-C",str(sample),"commit","-q","-m","Artificial read-only acceptance fixture"],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        subprocess.run(["git","-c","user.name=MCP Sample","-c","user.email=sample@localhost","-c","core.hooksPath=/dev/null","-C",str(sample),"commit","-q","-m","Artificial acceptance fixture"],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     configs = {}
     mcp_scopes = ["src", "tests", "scripts", "docs", "README.md", "pyproject.toml", "worker-requirements.lock"]
     # 源码 ZIP 没有根 Git 元数据时只授权人工样例，不扩大为整个解压目录。
@@ -48,6 +48,10 @@ def withdraw(balance, amount):
         config = root / "config" / f"{client}.local.toml"
         content = f'''# 本机可信配置。凭证只引用个人 Harness API key；不复制 key 值。
 data_dir = {json.dumps((root / "data" / client).as_posix(),ensure_ascii=False)}
+default_mode = "edit"
+
+[completion]
+auto_continue = true
 
 [model]
 provider = "deepseek-official"
@@ -82,6 +86,7 @@ path = {json.dumps(sample.as_posix(),ensure_ascii=False)}
 allowed_paths = ["."]
 exclude_patterns = []
 allow_untracked = []
+allow_edits = true
 '''
         if has_root_git:
             content += f'''
@@ -90,6 +95,7 @@ path = {json.dumps(root.as_posix(),ensure_ascii=False)}
 allowed_paths = ["src", "tests", "scripts", "docs", "README.md", "pyproject.toml", "worker-requirements.lock"]
 exclude_patterns = []
 allow_untracked = {json.dumps(mcp_extras,ensure_ascii=False)}
+allow_edits = true
 '''
         write_new(config,content)
         configs[client] = config
@@ -97,9 +103,12 @@ allow_untracked = {json.dumps(mcp_extras,ensure_ascii=False)}
     command = json.dumps(str(python),ensure_ascii=False)
     codex_args = json.dumps(["-m","harness_mcp.server","--shared","--config",str(configs["codex"])],ensure_ascii=False)
     cwd = json.dumps(str(root),ensure_ascii=False)
-    write_new(root / "examples/codex.local.toml",f"[mcp_servers.deepseek_harness]\ncommand = {command}\nargs = {codex_args}\ncwd = {cwd}\nstartup_timeout_sec = 30\ntool_timeout_sec = 30\n")
+    write_new(root / "examples/codex.local.toml",f"[mcp_servers.deepseek_harness]\ncommand = {command}\nargs = {codex_args}\ncwd = {cwd}\nenv_vars = [\"CODEX_APP_TOOLS_PIPE_PATH\"]\nstartup_timeout_sec = 30\ntool_timeout_sec = 30\n")
     claude = {"mcpServers":{"deepseek_harness":{"type":"stdio","command":str(python),"args":["-m","harness_mcp.server","--shared","--config",str(configs["claude"])]}}}
     write_new(root / "examples/claude.local.json",json.dumps(claude,ensure_ascii=False,indent=2)+"\n")
+    channel = json.loads(json.dumps(claude))
+    channel["mcpServers"]["deepseek_harness"]["args"].append("--claude-channel")
+    write_new(root / "examples/claude.channel.local.json",json.dumps(channel,ensure_ascii=False,indent=2)+"\n")
     print("已准备人工示例仓库、独立 Codex/Claude 数据目录配置和客户端配置片段；没有调用模型。")
     if not has_root_git:
         print("源码解压目录没有 .git，本次只授权人工示例 sample；请按连接教程在 config/*.local.toml 中配置自己的 Git 项目。")

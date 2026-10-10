@@ -1,6 +1,6 @@
 # 实现与权限边界
 
-本文描述 0.3.2 的服务结构，包括可选的 `--shared` 连接模式。安装与使用见 [连接教程](MCP-CONNECTION.zh-CN.md)，实际验证范围以相应版本记录为准；[VALIDATION.md](VALIDATION.md) 中的 0.3.1 记录不代替共享模式验收。
+本文描述 0.3.3 的服务结构，包括可选 `--shared` 连接、可信默认编辑模式、Codex 桌面完成通知和 Claude Code 实验 channel。Codex 原对话空闲唤醒、实际自动读取及完成工具入口，Claude 通道传输与隔离已验收；Claude 应用内续跑仍未验证。安装与使用见 [连接教程](MCP-CONNECTION.zh-CN.md)，具体范围见 [验证记录](VALIDATION.md)；历史协议、多会话和模型执行记录不代替自动续跑验收。
 
 ## 数据流
 
@@ -17,6 +17,9 @@ MCP stdio 任务工具
      或 DockerRunner：容器 Worker 与租约监管（可选审查）
   -> edit_collect_worker：执行停止后比较实际文件
   -> report：引用校验、差异校验、脱敏、持久化摘要与分页
+  -> completion_events：已绑定作业的终态事件，与任务终态同事务保存
+  -> CompletionDispatcher：固定完成消息 -> 原 Codex 主对话或私有 Claude channel
+  -> 主 AI：读取完整结果、复核、必要合入与验证 -> completion_ack
 ```
 
 主项目不作为 runtime 工作目录。review 使用任务快照，edit 使用另外复制的工作区。stdout 仅输出 MCP 协议；子进程原文不混入协议。适配器只采集根会话最后 assistant 文本，reasoning/tool-call 不作为报告。
@@ -41,9 +44,27 @@ Windows 后台通过 WMI/CIM 创建隐藏的独立进程，避免继承单个 st
 
 每轮 worker 创建独立 home 和工作副本，不保留一个持续运行的桌面 UI 会话。继续上下文只由本机保存的该会话脱敏历史报告有限重建，最多最近四轮、16,000 字；不同 session 的历史不会互相混入。编辑后的工作副本不会自动成为下一轮或其他会话的源码。主 AI 核验并合入本轮产物后，下一轮才从新的原项目创建快照；并行编辑仍需检查原文件哈希与冲突。
 
+## 完成通知与原对话续跑
+
+可信 `[completion] auto_continue=true` 开启功能；未设置时为 false。Codex 入口从实际请求宿主元数据读取 thread/turn，从受信启动环境读取动态 app-tools 通道；客户端通过 env_vars 白名单透传 CODEX_APP_TOOLS_PIPE_PATH，不硬编码通信路径。绑定前只读预检确认宿主能力与原对话归属；失败时回执 auto_continue=false 与原因，普通任务执行、状态和结果接口仍可使用。工具参数和模型输出不能指定通知目标、URL、命令或转发内容。
+
+接纳任务与来源绑定在 SQLite 同一事务完成，幂等重试保持原作业和目标。已有或已完成作业可以通过 `harness_watch(job_ids)` 明确绑定，不能重放模型；已绑定的目标不可变更。Codex 同一可信原对话可更新动态通道；Claude 前端的私有 session 身份只在该进程生命周期内稳定，重启后产生新身份，不能改投既有绑定。历史任务不会因升级而被批量自动唤醒。
+
+进入 `succeeded/failed/cancelled/timed_out/interrupted` 终态时，同事务为已绑定作业写入唯一完成事件。投递器由事件唤醒，发送固定续跑消息以及作业、事件、模式和终态标识；不插入用户提示、模型报告或代码。主 AI 被宿主启动后，重新读取原 `job_id` 的完整结果，遵守当前用户授权并独立复核。模型完成通知不能扩大权限，也不能使失败或部分编辑满足合入条件。
+
+事件独立记录 `pending/claimed/delivered/uncertain/acknowledged`、投递租约、delivery_status 与稳定错误码。delivered 的 Codex accepted 表示宿主接受，Claude channel_written 仅表示前端写出，不证明宿主已接收；两者均不能证明主 AI 已处理。完整结果及后续工作结束后调用 `harness_completion_ack(event_ids)` 才进入 acknowledged。`harness_completion_list(state=None, limit=20)` 和 ack 只作用于原 Codex 对话或原 Claude 前端身份；共享配置的普通作业读取权限不因此改变。
+
+确定未写出的临时错误可退避重试；写后断连或投递租约失效时进入 uncertain，不盲目再次发送可能已受理的消息。原对话通过事件列表读取结果并确认即可恢复。关闭前端不等于取消模型，通知绑定及事件持久化供恢复使用。失败、取消、超时、中断仍只提示读取状态与错误，不自动重新提交或应用部分修改。
+
+启用功能时增加 `harness_watch`、`harness_completion_list`、`harness_completion_ack`，共享模式合计十工具；关闭时仍七工具。普通 Claude 仍支持所有已开启的审查、编辑和子代理工具，没有推送上下文则返回 auto_continue=false。Codex 通知需要已通过预检的宿主，Claude 推送另须显式服务参数和客户端渠道登记；工具发现不证明自动唤醒。通知桥、真实模型完成与主对话续跑需分别验收。
+
+Claude 适配只在显式 `--claude-channel` 时声明实验 claude/channel capability，并按官方 notifications/claude/channel 格式发送固定事件。客户端需使用 legacy 握手协议并在交互启动时允许该开发渠道。服务没有渠道许可反馈，机制绑定 true 不代表 Claude 已登记或接收；channel_written 与 ack 分开。每个 stdio 前端独有的 connection/session 标识确保路由窗口隔离，session 标识不是 Claude 的真实会话编号。重启身份变化后旧 job_id 仍可读取，但不能用 watch 伪装原身份；/clear 或交互 resume 可能保留 MCP 进程，当前不宣称识别所有对话切换或安全跨重启恢复。配置与官方参考见连接教程。
+
 ## 配置与文件
 
 可信 TOML 决定 provider、model、base_url、凭证来源、项目范围与资源上限。工具只选择已有项目，不能传入任意本机目录或扩展权限。数据库冻结非秘密执行配置，凭证只存引用，执行时读取并在内存中登记实际凭证值供结果检查。
+
+根字段 `default_mode` 未设置时为 review，新 desktop 初始化配置为 edit；MCP schema 的默认值与可信配置一致。省略模式走可信默认，显式 review 保留只读任务；会话保存解析后的固定模式。edit 仍要求项目 allow_edits=true 和 desktop 后端，默认值本身不授予缺失的项目权限。Docker 不接受默认编辑。改变默认模式后恢复旧请求需传原模式或直接读取原 job_id，避免改变旧请求指纹。
 
 文件在 preparing 阶段捕获，默认取保存到工作树的 Git tracked 文件，未跟踪文件按可信配置逐个授权。路径校验拒绝绝对路径、上级、盘符、UNC、ADS、设备名、控制字符和歧义尾部；祖先与文件句柄身份核对 symlink、reparse 和多硬链接。凭证、私钥、依赖、缓存、常见二进制和备份排除规则不能识别全部硬编码秘密。
 

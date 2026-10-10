@@ -58,12 +58,20 @@ class ExecutorConfig:
 
 
 @dataclass(frozen=True)
+class CompletionConfig:
+    # 仅可信本机配置授权自动续跑；任务参数不能指定通知目标或命令。
+    auto_continue: bool = False
+
+
+@dataclass(frozen=True)
 class AppConfig:
     data_dir: Path
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     executor: ExecutorConfig = field(default_factory=ExecutorConfig)
+    default_mode: str = "review"
+    completion: CompletionConfig = field(default_factory=CompletionConfig)
 
 
 def normalize_relative_path(value: str, *, allow_root: bool = True) -> str:
@@ -100,7 +108,15 @@ def load_config(path: Path) -> AppConfig:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise HarnessError("INVALID_CONFIG", "配置文件无法读取或 TOML 格式不正确。") from None
-    _known_keys(data, {"data_dir", "model", "executor", "limits", "projects"}, "根配置")
+    _known_keys(data, {"data_dir", "default_mode", "completion", "model", "executor", "limits", "projects"}, "根配置")
+    default_mode = data.get("default_mode", "review")
+    if not isinstance(default_mode, str) or default_mode not in {"review", "edit"}:
+        raise HarnessError("INVALID_CONFIG", "default_mode 必须是 review 或 edit。")
+    completion_values = data.get("completion", {})
+    _known_keys(completion_values, set(CompletionConfig.__dataclass_fields__), "completion")
+    completion = CompletionConfig(**completion_values)
+    if not isinstance(completion.auto_continue, bool):
+        raise HarnessError("INVALID_CONFIG", "completion.auto_continue 必须是本机配置中的布尔值。")
     if not isinstance(data.get("data_dir"), str):
         raise HarnessError("INVALID_CONFIG", "必须设置本实例 data_dir。")
     data_dir = Path(data["data_dir"]).expanduser()
@@ -141,6 +157,8 @@ def load_config(path: Path) -> AppConfig:
     executor = ExecutorConfig(**execution_values)
     if not isinstance(executor.backend, str) or executor.backend not in {"desktop", "docker"}:
         raise HarnessError("INVALID_CONFIG", "执行器 backend 必须是 desktop 或 docker。")
+    if default_mode == "edit" and executor.backend != "desktop":
+        raise HarnessError("INVALID_CONFIG", "默认修改模式当前仅支持 Windows desktop 执行器。")
     if not isinstance(executor.desktop_root, str) or any(ord(c) < 32 for c in executor.desktop_root):
         raise HarnessError("INVALID_CONFIG", "桌面安装路径不正确。")
     if executor.desktop_root and not Path(executor.desktop_root).is_absolute():
@@ -180,12 +198,14 @@ def load_config(path: Path) -> AppConfig:
         if not isinstance(allow_edits, bool):
             raise HarnessError("INVALID_CONFIG", "allow_edits 必须是本机配置中的布尔值。")
         projects[project_id] = ProjectConfig(project_id, project_path, scopes("allowed_paths", ["."]), tuple(excludes), scopes("allow_untracked", []), allow_edits)
-    return AppConfig(data_dir, projects, limits, model, executor)
+    return AppConfig(data_dir, projects, limits, model, executor, default_mode, completion)
 
 
-def normalize_request(config: AppConfig, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str = "review") -> dict:
+def normalize_request(config: AppConfig, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str | None = None) -> dict:
     if not isinstance(project_id,str) or project_id not in config.projects:
         raise HarnessError("PROJECT_NOT_ALLOWED", "项目未在本机配置中授权。")
+    # 省略模式采用可信默认值；显式 review 仍可创建只读任务。
+    mode = config.default_mode if mode is None else mode
     if not isinstance(mode, str) or mode not in {"review", "edit"}:
         raise HarnessError("INVALID_MODE", "任务模式必须是 review 或 edit。")
     if mode == "edit":

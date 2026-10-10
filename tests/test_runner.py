@@ -219,8 +219,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_stops_whole_container_and_confirms(self):
         runner = FixtureDockerRunner(self.config, complete=False)
-        self.request["deadline_at"] = time.time() + 0.05
-        result = await runner.run(self.request, lambda stage: None)
+        def expire_started_container(stage):
+            if stage == "running":
+                runner._active["one"].deadline_at = time.time() - 1
+        result = await runner.run(self.request, expire_started_container)
         self.assertEqual(result["error"]["code"], "TIMED_OUT")
         self.assertTrue(result["execution_stopped"])
         self.assertFalse(runner.running)
@@ -273,8 +275,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stop_failure_keeps_owner_and_blocks_new_execution(self):
         runner = FixtureDockerRunner(self.config, complete=False, stop_fails=True)
-        self.request["deadline_at"] = time.time() + 0.05
-        result = await runner.run(self.request, lambda stage: None)
+        def expire_started_container(stage):
+            if stage == "running":
+                runner._active["one"].deadline_at = time.time() - 1
+        result = await runner.run(self.request, expire_started_container)
         self.assertEqual(result["error"]["code"], "TERMINATION_FAILED")
         self.assertFalse(result["execution_stopped"])
         self.assertIn("one", runner._active)

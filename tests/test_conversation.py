@@ -115,6 +115,34 @@ def test_open_enforces_project_edit_permission_and_explicit_scope(session_config
         assert not manager.session_list()["sessions"]
 
 
+def test_default_edit_bound_session_and_explicit_review_override(session_config):
+    configured = replace(session_config, default_mode="edit")
+    with metadata_manager(configured) as manager:
+        opened = asyncio.run(manager.session_open("alpha", "default-open", relative_paths=["src/sample.py"]))
+        assert opened["mode"] == "edit"
+        receipt = asyncio.run(manager.session_send(opened["session_id"], "fix one value", "default-send"))
+        request = manager.store.get(receipt["job_id"])["request"]
+        assert (request["mode"], request["relative_paths"]) == ("edit", ["src/sample.py"])
+        review = asyncio.run(manager.session_open("beta", "review-open", mode="review"))
+        assert review["mode"] == "review"
+        with pytest.raises(HarnessError) as error:
+            asyncio.run(manager.session_open("beta", "edit-not-authorized"))
+        assert_code(error.value, "EDIT_NOT_ALLOWED")
+
+
+def test_shared_proxy_uses_same_trusted_default_and_preserves_review(session_config):
+    from harness_mcp.shared_client import SharedClient
+
+    client = SharedClient(replace(session_config, default_mode="edit"), Path("unused-default-config.toml"))
+    client._call = AsyncMock(return_value={"job_id": "fixture"})
+    asyncio.run(client.submit("alpha", "fix", "default-submit"))
+    assert client._call.call_args.args[1]["mode"] == "edit"
+    asyncio.run(client.session_open("alpha", "default-open"))
+    assert client._call.call_args.args[1]["mode"] == "edit"
+    asyncio.run(client.session_open("beta", "review-open", mode="review"))
+    assert client._call.call_args.args[1]["mode"] == "review"
+
+
 def test_same_session_busy_preserves_idempotent_replay_and_binding(session_config):
     with metadata_manager(session_config) as manager:
         session = asyncio.run(manager.session_open("alpha", "open-one", mode="edit", relative_paths=["src/sample.py"]))
