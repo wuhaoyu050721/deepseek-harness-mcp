@@ -129,10 +129,16 @@ def _parse_output(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
+def _source_secret_error(matches: list[dict]) -> ReportError:
+    error = ReportError("EDIT_SECRET_DETECTED", "实际文件或机械数据命中凭证规则，拒绝导出可合入补丁。")
+    error.details = {"matches": matches[:64], "total_matches": len(matches), "truncated": len(matches) > 64}
+    return error
+
+
 def _verified_changes(value: Any, snapshot: Snapshot, max_output_bytes: int, secrets: tuple[str, ...]) -> dict[str, Any]:
     """机械变更必须完整且可核对；禁止截断或脱敏后仍沿用原内容摘要。"""
-    from .redaction import redact_text as diagnostic_redact
     from .edit_workspace import EditWorkspaceError, _diff
+    from .source_secrets import scan_deterministic, scan_source
 
     invalid = ReportError("EDIT_CHANGES_INVALID", "机械变更清单结构或内容摘要未通过校验。")
     if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value.get("schema_version") != 1 or value.get("snapshot_id") != snapshot.snapshot_id:
@@ -205,16 +211,117 @@ def _verified_changes(value: Any, snapshot: Snapshot, max_output_bytes: int, sec
                 raise invalid
         except EditWorkspaceError:
             raise invalid from None
+        # 对已核对的完整 before/after 做源码检查；diff 本身不能作为完整语法解析。
+        matches = [match for content in (original, encoded) if content is not None
+                   for match in scan_source(path, content, secrets)]
+        if matches:
+            raise _source_secret_error(matches)
         confirmed.append(dict(raw))
     digest = hashlib.sha256(_json_bytes({"snapshot_id": snapshot.snapshot_id, "changes": confirmed})).hexdigest()
     if value.get("change_set_id") != digest or patch != "".join(row["diff"] for row in confirmed):
         raise invalid
-    # 同时覆盖报告脱敏和宿主最后的诊断脱敏。任何改变均拒绝，不能改写可重放补丁。
+    # 补丁、路径、摘要只检查确定凭证；保持原始源码与哈希，不用自然语言脱敏作判定。
     for text in (patch, digest, *(item for row in confirmed for item in row.values() if isinstance(item, str))):
-        if redact_text(text, secrets) != text or diagnostic_redact(text, secrets, len(text)) != text:
-            raise ReportError("EDIT_SECRET_DETECTED", "机械变更含凭证或敏感认证内容，不能导出可合入补丁。")
+        matches = scan_deterministic(text, secrets)
+        if matches:
+            raise _source_secret_error(matches)
     return {"changed_files": [row["path"] for row in confirmed], "changes": confirmed,
             "patch_text": patch, "change_set_id": digest}
+
+
+_MECHANICAL_EXPORT_FIELDS = frozenset({"changed_files", "changes", "patch_text", "change_set_id"})
+
+
+def _scan_saved_mechanical(report: dict, secrets) -> None:
+    from .source_secrets import scan_source, scan_deterministic
+    for row in report["changes"]:
+        path = row["path"]
+        matches = scan_deterministic(path, secrets, path) + scan_deterministic(row["diff"], secrets, path)
+        if row["after_text"] is not None:
+            matches += scan_source(path, row["after_text"], secrets)
+        if matches:
+            raise _source_secret_error(matches)
+
+
+def redact_report_for_save(report: dict, snapshot: Snapshot, secrets=(), *, max_output_bytes=1048576) -> dict:
+    """以实际 Snapshot 重验来源后保护机械字段，不能依据 edit_ready 自述跳过检查。"""
+    from .redaction import _mark_verified_source_payload, redact_verified_source_payload, redact_value
+    if report.get("mode") != "edit" or report.get("edit_ready") is not True:
+        return redact_value(report, secrets)
+    raw = {"schema_version": 1, "snapshot_id": report.get("snapshot_id"), "changes": report.get("changes"),
+           "patch_text": report.get("patch_text"), "change_set_id": report.get("change_set_id"), "source_applied": False}
+    mechanical = _verified_changes(raw, snapshot, max_output_bytes, tuple(secrets))
+    if any(report.get(key) != mechanical[key] for key in _MECHANICAL_EXPORT_FIELDS):
+        raise ReportError("EDIT_CHANGES_INVALID", "报告机械数据与实际来源不一致。")
+    return redact_verified_source_payload(_mark_verified_source_payload(report, _MECHANICAL_EXPORT_FIELDS), secrets)
+
+
+def prepare_report_for_export(report: dict, expected_report_id: str, secrets=()) -> dict:
+    """仅在 read_report 已按 DB 摘要校验后调用，并再次绑定规范持久化字节。"""
+    from .redaction import _mark_verified_source_payload, redact_verified_source_payload, redact_value
+    if (not isinstance(expected_report_id, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_report_id)
+            or not hmac.compare_digest(hashlib.sha256(_json_bytes(report)).hexdigest(), expected_report_id)):
+        raise ReportError("REPORT_TAMPERED", "报告不匹配已校验的数据库摘要，不能保护机械数据。")
+    if report.get("mode") != "edit" or report.get("edit_ready") is not True:
+        return redact_value(report, secrets)
+    if not _complete_mechanical_structure(report):
+        raise ReportError("EDIT_CHANGES_INVALID", "已保存机械数据结构与摘要不一致。")
+    _scan_saved_mechanical(report, secrets)
+    # 先脱敏自然字段，后续 Markdown 必须由这份安全报告渲染。
+    return redact_verified_source_payload(_mark_verified_source_payload(report, _MECHANICAL_EXPORT_FIELDS), secrets)
+
+
+def protect_verified_result_page(page: dict, report: dict, secrets=()) -> dict:
+    """核对分页切片与安全报告，再授予本进程来源标记；普通 JSON 字段名没有权限。"""
+    from .redaction import _mark_verified_source_payload, _VerifiedSourcePayload, redact_verified_source_payload, redact_value
+    if not isinstance(report, _VerifiedSourcePayload):
+        return redact_value(page, secrets)
+    report = redact_verified_source_payload(report, secrets)
+    invalid = ReportError("EDIT_CHANGES_INVALID", "分页机械数据不匹配已验证报告。")
+    if not isinstance(page, dict) or ("changes" in page and not isinstance(page["changes"], list)):
+        raise invalid
+    rows = {row["path"]: row for row in report["changes"]}
+    _, verified_metadata, _ = _change_metadata(report)
+    metadata = {row["path"]: row for row in verified_metadata}
+    fields = set(_MECHANICAL_EXPORT_FIELDS) & set(page)
+    if "patch_text" in page:
+        offset = page.get("patch_text_offset")
+        text = page["patch_text"]
+        if (type(offset) is not int or not 0 <= offset <= len(report["patch_text"]) or not isinstance(text, str)
+                or text != report["patch_text"][offset:offset + len(text)]):
+            raise invalid
+    for row in page.get("changes", []):
+        original = rows.get(row.get("path")) if isinstance(row, dict) else None
+        if original is None or row != metadata[row["path"]]:
+            raise invalid
+    if "changed_files" in page and page["changed_files"] != [row["path"] for row in page.get("changes", [])]:
+        raise invalid
+    if "change_set_id" in page and page["change_set_id"] != report["change_set_id"]:
+        raise invalid
+    if "change_contents" in page:
+        if not isinstance(page["change_contents"], list):
+            raise invalid
+        fields.add("change_contents")
+        for item in page["change_contents"]:
+            if not isinstance(item, dict):
+                raise invalid
+            original = rows.get(item.get("path"))
+            offset, text = item.get("offset"), item.get("text")
+            if (original is None or set(item) != {"path", "field", "offset", "text", "total_chars", "sha256"}
+                    or original["after_text"] is None or item.get("field") != "after_text"
+                    or type(offset) is not int or not 0 <= offset <= len(original["after_text"]) or not isinstance(text, str)
+                    or item.get("total_chars") != len(original["after_text"])
+                    or item.get("sha256") != original["after_sha256"]
+                    or text != original["after_text"][offset:offset + len(text)]):
+                raise invalid
+    if "report_text" in page:
+        fields.add("report_text")
+        offset, text = page.get("report_text_offset"), page["report_text"]
+        markdown = render_markdown(report)
+        if (type(offset) is not int or not 0 <= offset <= len(markdown) or not isinstance(text, str)
+                or text != markdown[offset:offset + len(text)]):
+            raise invalid
+    return redact_verified_source_payload(_mark_verified_source_payload(page, fields), secrets)
 
 
 def build_report(
@@ -396,76 +503,216 @@ def read_report(directory: Path, max_bytes: int = 2097152, expected_report_id: s
     return report
 
 
-def _edit_page(report: dict[str, Any], positions: tuple[int, int, int, int], page_size: int) -> tuple[dict[str, Any], tuple[int, int, int, int], bool]:
-    """变更元数据、补丁、新文本分别分页，所有偏移共用报告游标。"""
-    changes = report.get("changes", [])
-    patch = report.get("patch_text", "")
-    if not isinstance(changes, list) or not isinstance(patch, str):
-        raise ReportError("REPORT_CORRUPT", "已保存机械变更结构无效。")
-    changes_offset, patch_offset, content_index, content_offset = positions
-    if changes_offset > len(changes) or patch_offset > len(patch) or content_index > len(changes):
-        raise ReportError("INVALID_CURSOR", "变更读取游标超出报告范围。")
-    current_text = changes[content_index].get("after_text") if content_index < len(changes) else None
-    if content_offset > len(current_text or ""):
-        raise ReportError("INVALID_CURSOR", "变更内容读取游标超出文件范围。")
-    metadata = []
-    diff_offset = 0
-    for row in changes:
-        metadata.append({
-            **{name: row[name] for name in ("path", "change_type", "before_sha256", "after_sha256", "before_size_bytes", "after_size_bytes")},
-            "diff_offset": diff_offset, "diff_chars": len(row["diff"]),
-            "after_text_chars": len(row["after_text"] or ""), "after_text_is_null": row["after_text"] is None,
-        })
-        diff_offset += len(row["diff"])
-    page_changes = []
-    next_changes_offset = changes_offset
-    for row in metadata[changes_offset:changes_offset + page_size]:
-        candidate = [*page_changes, row]
-        if page_changes and len(_json_bytes({"changes": candidate})) > 65536:
-            break
-        page_changes = candidate
-        next_changes_offset += 1
-    next_patch_offset = min(patch_offset + 8000, len(patch))
-    # 空新文件由 metadata 的 0 字符、非 null 标记表达；删除由 null 表达。
-    content_budget = 8000
-    contents = []
-    while content_index < len(changes):
-        row = changes[content_index]
-        after = row["after_text"]
-        if after is None or content_offset == len(after):
-            content_index += 1
-            content_offset = 0
-            continue
-        if not content_budget or len(contents) >= page_size:
-            break
-        end = min(content_offset + content_budget, len(after))
-        chunk = after[content_offset:end]
-        contents.append({"path": row["path"], "field": "after_text", "offset": content_offset,
-                         "text": chunk, "total_chars": len(after), "sha256": row["after_sha256"]})
-        content_budget -= len(chunk)
-        content_offset = end
-    next_positions = (next_changes_offset, next_patch_offset, content_index, content_offset)
-    more = next_changes_offset < len(changes) or next_patch_offset < len(patch) or content_index < len(changes)
+_CITATION_ERRORS = frozenset({
+    "invalid_relative_path", "invalid_line_start", "invalid_line_end", "path_not_in_snapshot",
+    "line_out_of_range", "evidence_not_in_referenced_lines", "missing_evidence",
+})
+_FINDING_FORMAT_ERRORS = frozenset({"finding_not_object", "unknown_severity", "missing_title"})
+_PAGE_LIMIT_BYTES = 96 * 1024
+_CURSOR_RESERVE_BYTES = 2048
+_CHANGE_FIELDS = ("path", "change_type", "before_sha256", "after_sha256", "before_size_bytes", "after_size_bytes")
+_POSITION_FIELDS = ("offset", "text_offset", "changes_offset", "patch_offset", "content_index", "content_offset")
+
+
+def _complete_mechanical_structure(report: dict[str, Any]) -> bool:
+    """复用已保存的机械证据核对结构/摘要；这不检查当前原项目或批准合入。"""
+    rows, patch = report.get("changes"), report.get("patch_text")
+    if (report.get("edit_ready") is not True or report.get("source_applied") is not False
+            or report.get("requires_main_agent_review") is not True or report.get("error") is not None
+            or report.get("finish_reason") != "completed" or not isinstance(rows, list)
+            or len(rows) > 10000 or not isinstance(patch, str) or not isinstance(report.get("snapshot_id"), str)):
+        return False
+    fields = {*_CHANGE_FIELDS, "diff", "after_text"}
+    paths: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != fields:
+            return False
+        try:
+            path = normalize_relative_path(row["path"])
+        except SnapshotError:
+            return False
+        if (path != row["path"] or path.casefold() in paths or not isinstance(row["change_type"], str)
+                or row["change_type"] not in {"add", "modify", "delete"}):
+            return False
+        paths.add(path.casefold())
+        if not isinstance(row["diff"], str) or any(type(row[name]) is not int or row[name] < 0 for name in ("before_size_bytes", "after_size_bytes")):
+            return False
+        before, after = row["before_sha256"], row["after_sha256"]
+        if row["change_type"] == "add":
+            if before is not None or row["before_size_bytes"] != 0:
+                return False
+        elif not isinstance(before, str) or not re.fullmatch(r"[0-9a-f]{64}", before):
+            return False
+        text = row["after_text"]
+        if row["change_type"] == "delete":
+            if text is not None or after is not None or row["after_size_bytes"] != 0:
+                return False
+        else:
+            if not isinstance(text, str) or "\x00" in text or not isinstance(after, str):
+                return False
+            try:
+                encoded = text.encode("utf-8", errors="strict")
+            except UnicodeError:
+                return False
+            if len(encoded) != row["after_size_bytes"] or hashlib.sha256(encoded).hexdigest() != after:
+                return False
+            if row["change_type"] == "modify" and before == after:
+                return False
+    try:
+        digest = hashlib.sha256(_json_bytes({"snapshot_id": report["snapshot_id"], "changes": rows})).hexdigest()
+    except (ReportError, UnicodeError):
+        return False
+    return (report.get("changed_files") == [row["path"] for row in rows]
+            and report.get("change_set_id") == digest and patch == "".join(row["diff"] for row in rows))
+
+
+def _validation_counts(report: dict[str, Any], family: frozenset[str]) -> dict[str, Any]:
+    counts = {"valid": 0, "invalid": 0, "unknown": 0}
+    findings = report.get("findings", [])
+    if not isinstance(findings, list):
+        return {"state": "unavailable", **counts, "total": 0, "scope": "retained_findings"}
+    known = _CITATION_ERRORS | _FINDING_FORMAT_ERRORS
+    for finding in findings:
+        validation = finding.get("validation") if isinstance(finding, dict) else None
+        errors = validation.get("errors") if isinstance(validation, dict) else None
+        status = validation.get("status") if isinstance(validation, dict) else None
+        # 旧记录没有可识别的校验明细时，不把缺失证据推断为 valid。
+        if (not isinstance(errors, list) or any(not isinstance(error, str) for error in errors)
+                or not isinstance(status, str) or status not in {"valid", "invalid"} or (status == "valid" and errors)
+                or (status == "invalid" and not errors)):
+            counts["unknown"] += 1
+        elif any(error in family for error in errors):
+            counts["invalid"] += 1
+        elif any(error not in known for error in errors) or (family == _CITATION_ERRORS and "finding_not_object" in errors):
+            counts["unknown"] += 1
+        else:
+            counts["valid"] += 1
+    active = [name for name, count in counts.items() if count]
+    if not findings:
+        parsed = report.get("report_format") == "valid" or (
+            isinstance(report.get("report_format_error"), dict)
+            and report["report_format_error"].get("code") == "FINDING_COUNT_LIMIT")
+        state = "no_findings" if parsed else "unavailable"
+    else:
+        state = active[0] if len(active) == 1 else "mixed"
+    return {"state": state, **counts, "total": len(findings), "scope": "retained_findings"}
+
+
+def report_quality(report: dict[str, Any], execution_status: str | None = None) -> dict[str, Any]:
+    """派生读取质量，不改已保存报告，也不把模型/引用校验当作业务验收。"""
+    edit = report.get("mode") == "edit"
+    rows = report.get("changes")
+    availability = "not_applicable" if not edit else "unavailable"
+    if edit and execution_status == "succeeded" and _complete_mechanical_structure(report):
+        availability = "available_for_review"
     return {
-        "mode": "edit", "edit_ready": report.get("edit_ready") is True,
-        "requires_main_agent_review": True, "source_applied": False,
-        "change_set_id": report.get("change_set_id"),
-        "changed_files": [row["path"] for row in page_changes], "total_changed_files": len(changes),
-        "changes": page_changes, "changes_offset": changes_offset, "total_changes": len(changes),
-        "patch_text": patch[patch_offset:next_patch_offset], "patch_text_offset": patch_offset, "total_patch_chars": len(patch),
-        "change_contents": contents,
-    }, next_positions, more
+        "report_format": report.get("report_format", "unknown"),
+        "citations": _validation_counts(report, _CITATION_ERRORS),
+        "finding_format": _validation_counts(report, _FINDING_FORMAT_ERRORS),
+        "patch": {"availability": availability, "changed_files_count": len(rows) if isinstance(rows, list) else 0,
+                  "source_applied": False, "requires_main_agent_review": True, "current_source_match": "not_checked"},
+        "tests": "not_run",
+    }
 
 
-def paginate_report(report: dict[str, Any], job_id: str, cursor: str | None = None, page_size: int = 20) -> dict[str, Any]:
+def _page_fits(page: dict[str, Any]) -> bool:
+    # 用含默认空白的 UTF-8 JSON 计量，比持久化的紧凑编码保守；预留完整游标。
+    try:
+        size = len(json.dumps(page, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ReportError("REPORT_NOT_SERIALIZABLE", "报告包含不可分页的数据。") from exc
+    return size <= _PAGE_LIMIT_BYTES - _CURSOR_RESERVE_BYTES
+
+
+def _append_page_rows(page: dict[str, Any], field: str, rows: list[Any], offset: int, page_size: int) -> int:
+    start = offset
+    while offset < min(start + page_size, len(rows)):
+        page[field].append(rows[offset])
+        if not _page_fits(page) or (offset > start and len(_json_bytes({field: page[field]})) > 65536):
+            page[field].pop()
+            break
+        offset += 1
+    return offset
+
+
+def _page_text(page: dict[str, Any], field: str, text: str, offset: int, limit: int = 8000) -> int:
+    """按整体字节预算取完整 Unicode 字符，所有偏移仍是 Python 字符数。"""
+    lower, upper = 0, min(limit, len(text) - offset)
+    while lower < upper:
+        middle = (lower + upper + 1) // 2
+        page[field] = text[offset:offset + middle]
+        if _page_fits(page):
+            lower = middle
+        else:
+            upper = middle - 1
+    page[field] = text[offset:offset + lower]
+    return offset + lower
+
+
+def _change_metadata(report: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    rows, patch = report.get("changes", []), report.get("patch_text", "")
+    if not isinstance(rows, list) or not isinstance(patch, str):
+        raise ReportError("REPORT_CORRUPT", "已保存机械变更结构无效。")
+    metadata, diff_offset = [], 0
+    for row in rows:
+        if (not isinstance(row, dict) or any(name not in row for name in (*_CHANGE_FIELDS, "diff", "after_text"))
+                or not isinstance(row["path"], str) or not isinstance(row["diff"], str)
+                or not (row["after_text"] is None or isinstance(row["after_text"], str))):
+            raise ReportError("REPORT_CORRUPT", "已保存机械变更条目结构无效。")
+        metadata.append({**{name: row[name] for name in _CHANGE_FIELDS}, "diff_offset": diff_offset,
+                         "diff_chars": len(row["diff"]), "after_text_chars": len(row["after_text"] or ""),
+                         "after_text_is_null": row["after_text"] is None})
+        diff_offset += len(row["diff"])
+    return rows, metadata, patch
+
+
+def _page_contents(page: dict[str, Any], rows: list[dict[str, Any]], index: int, offset: int, page_size: int) -> tuple[int, int]:
+    budget = 8000
+    while index < len(rows):
+        row, text = rows[index], rows[index]["after_text"]
+        # 空文件与删除只使用原元数据标记；不合成内容或改变其摘要。
+        if text is None or offset == len(text):
+            index, offset = index + 1, 0
+            continue
+        if not budget or len(page["change_contents"]) >= page_size:
+            break
+        item = {"path": row["path"], "field": "after_text", "offset": offset, "text": "",
+                "total_chars": len(text), "sha256": row["after_sha256"]}
+        page["change_contents"].append(item)
+        lower, upper = 0, min(budget, len(text) - offset)
+        while lower < upper:
+            middle = (lower + upper + 1) // 2
+            item["text"] = text[offset:offset + middle]
+            if _page_fits(page):
+                lower = middle
+            else:
+                upper = middle - 1
+        if not lower:
+            page["change_contents"].pop()
+            break
+        item["text"] = text[offset:offset + lower]
+        budget, offset = budget - lower, offset + lower
+    return index, offset
+
+
+def paginate_report(
+    report: dict[str, Any], job_id: str, cursor: str | None = None, page_size: int = 20,
+    view: str = "full", *, execution_status: str | None = None,
+) -> dict[str, Any]:
     if report.get("job_id") != job_id:
         raise ReportError("REPORT_JOB_MISMATCH", "报告不属于当前任务。")
     if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 100:
         raise ReportError("INVALID_PAGE_SIZE", "每页问题数量必须在 1 到 100 之间。")
+    if not isinstance(view, str) or view not in {"summary", "patch", "files", "full"}:
+        raise ReportError("INVALID_RESULT_VIEW", "结果视图必须是 summary、patch、files 或 full。")
     digest = hashlib.sha256(_json_bytes(report)).hexdigest()
-    offset, text_offset = 0, 0
     edit = report.get("mode") == "edit"
-    positions = (0, 0, 0, 0)
+    fields = {
+        "summary": ("offset",), "patch": ("changes_offset", "patch_offset"),
+        "files": ("changes_offset", "content_index", "content_offset"),
+        "full": _POSITION_FIELDS if edit else ("offset", "text_offset"),
+    }[view]
+    positions = dict.fromkeys(_POSITION_FIELDS, 0)
     if cursor is not None:
         if not isinstance(cursor, str) or len(cursor) > 2048:
             raise ReportError("INVALID_CURSOR", "报告读取游标无效。")
@@ -473,48 +720,96 @@ def paginate_report(report: dict[str, Any], job_id: str, cursor: str | None = No
             payload = json.loads(base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True))
         except (ValueError, UnicodeEncodeError, binascii.Error, RecursionError) as exc:
             raise ReportError("INVALID_CURSOR", "报告读取游标无法解析。") from exc
-        if not isinstance(payload, dict) or payload.get("job_id") != job_id or payload.get("digest") != digest or payload.get("page_size") != page_size:
+        if (not isinstance(payload, dict) or payload.get("job_id") != job_id or payload.get("digest") != digest
+                or type(payload.get("page_size")) is not int or payload.get("page_size") != page_size):
             raise ReportError("INVALID_CURSOR", "游标不匹配当前任务、报告内容或分页大小。")
-        offset, text_offset = payload.get("offset"), payload.get("text_offset")
-        if edit:
-            positions = tuple(payload.get(name) for name in ("changes_offset", "patch_offset", "content_index", "content_offset"))
-        if any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in (offset, text_offset, *positions)):
+        legacy = "version" not in payload and "view" not in payload
+        if ((legacy and view != "full") or (not legacy and (
+                type(payload.get("version")) is not int or payload.get("version") != 2 or payload.get("view") != view))):
+            raise ReportError("INVALID_CURSOR", "游标不匹配当前结果视图或游标版本。")
+        positions.update({name: payload.get(name) for name in fields})
+        if any(type(positions[name]) is not int or positions[name] < 0 for name in fields):
             raise ReportError("INVALID_CURSOR", "报告读取游标偏移无效。")
     findings = report.get("findings", [])
-    text = render_markdown(report)
-    if offset > len(findings) or text_offset > len(text):
+    if not isinstance(findings, list):
+        raise ReportError("REPORT_CORRUPT", "已保存问题清单结构无效。")
+    # 新视图不生成 Markdown，避免把整份补丁再次装进另一文本流。
+    text = render_markdown(report) if view == "full" else ""
+    rows, metadata, patch = _change_metadata(report) if edit and view != "summary" else ([], [], "")
+    if (positions["offset"] > len(findings) or positions["text_offset"] > len(text)
+            or positions["changes_offset"] > len(metadata) or positions["patch_offset"] > len(patch)
+            or positions["content_index"] > len(rows)):
         raise ReportError("INVALID_CURSOR", "报告读取游标超出报告范围。")
-    next_offset = offset
-    page_findings: list[dict[str, Any]] = []
-    for finding in findings[offset:offset + page_size]:
-        candidate = [*page_findings, finding]
-        if page_findings and len(_json_bytes({"findings": candidate})) > 65536:
-            break
-        page_findings = candidate
-        next_offset += 1
-    next_text_offset = min(text_offset + 8000, len(text))
-    edit_values, edit_more = {}, False
-    if edit:
-        edit_values, positions, edit_more = _edit_page(report, positions, page_size)
-        edit_values.update(report_text_offset=text_offset, total_report_text_chars=len(text))
-    next_cursor = None
-    if next_offset < len(findings) or next_text_offset < len(text) or edit_more:
-        payload = {"job_id": job_id, "digest": digest, "page_size": page_size, "offset": next_offset, "text_offset": next_text_offset}
-        if edit:
-            payload.update(zip(("changes_offset", "patch_offset", "content_index", "content_offset"), positions))
-        next_cursor = base64.urlsafe_b64encode(_json_bytes(payload)).decode("ascii")
-    # 返回摘要/一页问题/一页文本，避免原文和完整文件清单撑满主 AI 上下文。
-    return {
+    current_text = rows[positions["content_index"]]["after_text"] if positions["content_index"] < len(rows) else None
+    if positions["content_offset"] > len(current_text or ""):
+        raise ReportError("INVALID_CURSOR", "变更内容读取游标超出文件范围。")
+    original_positions = dict(positions)
+    metadata_included = view == "full" or cursor is None
+    page: dict[str, Any] = {
         "job_id": job_id, "project_id": report.get("project_id"), "report_id": digest,
-        "snapshot_id": report.get("snapshot_id"), "review_scope": [_bounded(v, 500) for v in report.get("review_scope", [])[:25]],
-        "review_scope_count": len(report.get("review_scope", [])),
-        "summary": _bounded(report.get("summary"), 2000), "report_format": report.get("report_format"),
-        "report_format_error": report.get("report_format_error"), "finish_reason": report.get("finish_reason"),
-        "findings": page_findings, "total_findings": len(findings),
-        "changed_files": [], "tests": "not_run", "usage": report.get("usage"),
-        "timing": report.get("timing"), "error": report.get("error"),
-        "limitations": [_bounded(v, 500) for v in report.get("limitations", [])[:10]],
-        "limitations_count": len(report.get("limitations", [])),
-        "report_text": text[text_offset:next_text_offset], "next_cursor": next_cursor,
-        **edit_values,
+        "snapshot_id": report.get("snapshot_id"), "view": view,
+        "execution_status": execution_status if execution_status is not None else "unknown",
+        "quality": report_quality(report, execution_status), "metadata_included": metadata_included,
+        "next_cursor": None,
     }
+    if metadata_included:
+        page.update({
+            "review_scope": [_bounded(v, 500) for v in report.get("review_scope", [])[:25]],
+            "review_scope_count": len(report.get("review_scope", [])),
+            "summary": _bounded(report.get("summary"), 2000), "report_format": report.get("report_format"),
+            "report_format_error": report.get("report_format_error"), "finish_reason": report.get("finish_reason"),
+            "tests": "not_run", "usage": report.get("usage"), "timing": report.get("timing"), "error": report.get("error"),
+            "limitations": [_bounded(v, 500) for v in report.get("limitations", [])[:10]],
+            "limitations_count": len(report.get("limitations", [])),
+        })
+    if view != "full":
+        page["mode"] = "edit" if edit else "review"
+    if edit:
+        page.update(mode="edit", edit_ready=report.get("edit_ready") is True, requires_main_agent_review=True,
+                    source_applied=False, change_set_id=report.get("change_set_id"),
+                    total_changed_files=len(report.get("changes", [])) if isinstance(report.get("changes"), list) else 0)
+    if view in {"summary", "full"}:
+        page.update(findings=[], total_findings=len(findings))
+        if view == "summary":
+            page["findings_offset"] = positions["offset"]
+    if view == "full":
+        page.update(changed_files=[], report_text="")
+        if edit:
+            page.update(report_text_offset=positions["text_offset"], total_report_text_chars=len(text))
+    if (edit and view == "full") or view in {"patch", "files"}:
+        page.update(changed_files=[], changes=[], changes_offset=positions["changes_offset"],
+                    total_changes=len(metadata), total_changed_files=len(metadata))
+    if (edit and view == "full") or view == "patch":
+        page.update(patch_text="", patch_text_offset=positions["patch_offset"], total_patch_chars=len(patch))
+    if (edit and view == "full") or view == "files":
+        page["change_contents"] = []
+    if not _page_fits(page):
+        raise ReportError("REPORT_PAGE_LIMIT", "结果元数据超过单页大小上限，请缩小任务范围。")
+    if view in {"summary", "full"}:
+        positions["offset"] = _append_page_rows(page, "findings", findings, positions["offset"], page_size)
+    if view == "full":
+        positions["text_offset"] = _page_text(page, "report_text", text, positions["text_offset"])
+    if "changes" in page:
+        positions["changes_offset"] = _append_page_rows(page, "changes", metadata, positions["changes_offset"], page_size)
+        page["changed_files"] = [row["path"] for row in page["changes"]]
+        # 路径清单和元数据是同一页；将它计入预算后再决定后续文本流。
+        while page["changes"] and not _page_fits(page):
+            page["changes"].pop()
+            page["changed_files"].pop()
+            positions["changes_offset"] -= 1
+    if "patch_text" in page:
+        positions["patch_offset"] = _page_text(page, "patch_text", patch, positions["patch_offset"])
+    if "change_contents" in page:
+        positions["content_index"], positions["content_offset"] = _page_contents(
+            page, rows, positions["content_index"], positions["content_offset"], page_size)
+    limits = {"offset": len(findings), "text_offset": len(text), "changes_offset": len(metadata), "patch_offset": len(patch), "content_index": len(rows)}
+    more = any(positions[name] < limits[name] for name in fields if name in limits)
+    if more:
+        if cursor is not None and all(positions[name] == original_positions[name] for name in fields):
+            raise ReportError("REPORT_PAGE_LIMIT", "单条结果超过分页大小上限，请缩小任务范围。")
+        payload = {"version": 2, "view": view, "job_id": job_id, "digest": digest, "page_size": page_size,
+                   **{name: positions[name] for name in fields}}
+        page["next_cursor"] = base64.urlsafe_b64encode(_json_bytes(payload)).decode("ascii")
+        if len(page["next_cursor"]) > _CURSOR_RESERVE_BYTES:
+            raise ReportError("REPORT_PAGE_LIMIT", "结果游标超过大小上限。")
+    return page

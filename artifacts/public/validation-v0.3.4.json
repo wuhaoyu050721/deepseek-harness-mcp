@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "version": "0.3.4",
+  "validation_date": "2026-10-11",
+  "status": "local_regression_and_real_artificial_php_desktop_export_passed",
+  "regression": {
+    "tests": 1149,
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "junit_cases_include_subtests": true
+  },
+  "source_scan": {
+    "php_dynamic_empty_auth_regex_regressions": "passed",
+    "known_secret_before_snapshot_and_rotation": "passed",
+    "scan_scope": "bounded_lexical_recognition_no_cross_variable_dataflow",
+    "diagnostics": "rule_relative_path_line_only"
+  },
+  "report": {
+    "views": [
+      "summary",
+      "patch",
+      "files",
+      "full"
+    ],
+    "aggregate_page_limit_bytes": 98304,
+    "execution_quality_separated": true,
+    "citations_counts_scope": "retained_findings",
+    "patch_available_means": "requires_main_agent_review_current_source_not_checked",
+    "unicode_crlf_empty_delete_byte_hash_regressions": "passed"
+  },
+  "shared_transport": {
+    "authenticated_loopback_multiple_frontends": "passed",
+    "mcp_tools_without_completion": 9,
+    "mcp_tools_with_completion": 12,
+    "connection_counts_and_frontend_close_isolation": "passed"
+  },
+  "preflight_lifecycle": {
+    "no_model_or_project_modification": true,
+    "parent_close_and_unconfirmed_stop_retains_ownership": "passed",
+    "preparation_retry_preserves_original_owner": "passed",
+    "injected_no_model_preparation_compatibility": "passed"
+  },
+  "diagnostics": {
+    "first_id_stage_type_across_worker_runner_rpc_mcp": "passed",
+    "unconfirmed_stop_and_restart_preserve_first_diagnostic": "passed",
+    "raw_exception_text_exported": false
+  },
+  "real_desktop_probe": {
+    "model_jobs_submitted": 1,
+    "project": "artificial_php_fixture",
+    "preflight_passed": true,
+    "mcp_tools_discovered": 12,
+    "status": "succeeded",
+    "source_unchanged": true,
+    "exported_source_byte_hash_verified": true,
+    "automatic_host_notification_tested": false,
+    "candidate_before_final_lifecycle_and_lexical_boundary_fixes": true
+  },
+  "completion": {
+    "implementation": "existing_origin_bound_completion_events",
+    "fallback_poll_seconds": [
+      2,
+      5,
+      10,
+      20
+    ],
+    "terminal_poll_seconds": 0,
+    "codex_actual_idle_continuation_evidence_version": "0.3.3",
+    "claude_application_continuation_verified": false
+  },
+  "fresh_source_install": {
+    "scope": "extracted_source_new_venv_no_git_no_model_or_host_messages",
+    "locked_dependency_install": "passed",
+    "initialization_and_prerequisites": "passed",
+    "generic_mcp_tools": 12,
+    "claude_legacy_protocol": "2025-11-25",
+    "claude_channel_tools": 12,
+    "independent_backends": 2,
+    "idle_exit_confirmed": true,
+    "personal_configuration_unchanged": true,
+    "model_tasks_submitted": 0,
+    "actual_host_messages_sent": 0
+  },
+  "existing_backend_diagnostic": {
+    "scope": "read_only_no_service_reload",
+    "state": "connected_legacy",
+    "restart_required": true,
+    "counts_available": false
+  },
+  "not_verified": [
+    "Claude application channel registration and automatic model continuation",
+    "live provider cancellation billing",
+    "other operating systems and Python versions",
+    "real Docker execution",
+    "historical failed coding delegation original exception cause"
+  ],
+  "source_module_sha256": {
+    "src/harness_mcp/__init__.py": "063fd7b3a234d03d5d8b54c1d26c239159b0cc091f9f94c37f1e0615a6325e19",
+    "src/harness_mcp/claude_channel.py": "4678c16e534c6a1dffbb16d240719b2a3cb643a07381daa9489ab829c1dfc99c",
+    "src/harness_mcp/codex_app_bridge.py": "5fb1cd9e93a9664e636b74d8cc1544f9960300d3118a5e91acbcfaa06991fdd2",
+    "src/harness_mcp/completion.py": "1c7906a06becae32b46610faa3b034f3a7a7f857a3d910d358922305267b8147",
+    "src/harness_mcp/config.py": "0b62e07e377fa4f541d785f0d6fd1cf8594b82ae5bd1c8ec7fec9e1a49476de8",
+    "src/harness_mcp/conversation.py": "54b09a9bf2c86ac004c9f2406b381da7ac65f84d50f6c7b9c7e1ee7cf230913b",
+    "src/harness_mcp/desktop_launcher.py": "9c21c99b5aefaa2c3a12f54039077332c01682979f60d2e6bcfbea3627730df5",
+    "src/harness_mcp/desktop_runner.py": "6ee8074e014ceea1c46d9a62e805b9d9bb13c6e329a0b4eab4575c2b623fd8d8",
+    "src/harness_mcp/desktop_worker.py": "6507abea0b19d85f3d8df8c2f92bebf30b883594f4f312d5b3de1a52cdd1e98c",
+    "src/harness_mcp/doctor.py": "1d679bf1d4c6ca2b5156144ab55afa1b9701d386881c3b000b57114d7463745d",
+    "src/harness_mcp/edit_collect_worker.py": "9078ee074c494e3eeb40c1fb48e9ac928fcc2dc8ad8edfe5ba6772284cb4b782",
+    "src/harness_mcp/edit_workspace.py": "8cf3ac8a1ba91971f5e163af323ee9ebf848b26631aa7be24ac6562fd3959f03",
+    "src/harness_mcp/errors.py": "39cee7b3477095fe231b76ef94718e176bf4dc5c289826199b381d900fea2dcb",
+    "src/harness_mcp/harness_adapter.py": "711da8007c708a15ec9ace10663f4cf41580ae329aaa14f1da67413b8fa87f31",
+    "src/harness_mcp/instance_lock.py": "a9d1b0dfa3b2e1196c9775e9a001dbe141020f6dcb0eda83c263b6056f25c575",
+    "src/harness_mcp/job_store.py": "3535d8fd2cc7825c6a4f8b084c47deaa748800065ef388b8a2de4ddc4b125d21",
+    "src/harness_mcp/parallel_manager.py": "64b46e1d756f7336a9323f82ceedf6b42efd390e8102446118e4c9fb62218fd5",
+    "src/harness_mcp/probe.py": "5787e2390d2f567c839a13188a16378925cd2fcb2ff292f16c7b51d52873851d",
+    "src/harness_mcp/process_control.py": "4cca4bb07cb653a797815ac59896ceff1a1b8a1403d694c7fe9e0f6ca47dc383",
+    "src/harness_mcp/redaction.py": "894279c529467b34f2fab82f560d8f2a125ef6491ba89e0665d1e4d2e1e242f9",
+    "src/harness_mcp/report.py": "2e5da2de521d49a1a885b3834faa5bbf050c6f2990068ecd7120409c90cf1f70",
+    "src/harness_mcp/review_prompt.py": "7a5290b8698d5d29ccdf32c0b27aa218c1cca54fe4788151e6899be7c93f5d29",
+    "src/harness_mcp/runner.py": "130f39ad1e64ad5a2dad55fdcc6b8a246ed5b6d1a750887b41076696dde1c3c7",
+    "src/harness_mcp/server.py": "98c7cbdca71db4b67358cf97babdf69552e902365e067bc4b944cf65050f116d",
+    "src/harness_mcp/service_diagnostics.py": "299f444cedf51c7861f9e4df310ef0ee937a0428289509384a6912b616d3e488",
+    "src/harness_mcp/service_state.py": "a68724570f600ec90742cd03623586431fe228f09f47c1d64512fd21d18ee841",
+    "src/harness_mcp/shared_bootstrap.py": "938c81516604d26d4040d8553be9fdb5818503b71321dd3bbc51af7a07944218",
+    "src/harness_mcp/shared_client.py": "82bdfbf4e08826ba202db4af6dd446347215681d1930c3238fdfd7549b56ada6",
+    "src/harness_mcp/shared_service.py": "6f7f5c19c758804f5edd867fcf0f1ed25e87eb2ec0b8d8ebdfe6c0dffe768428",
+    "src/harness_mcp/snapshot_worker.py": "7bdf4b9f9006af636b6f2df83810d76abee8586abe86836bddfb299f57f28260",
+    "src/harness_mcp/source_secrets.py": "41614b45a1fec5a95a1e13b09cc2eee83564f8634771eddcd31ae43e8106517c",
+    "src/harness_mcp/supervisor.py": "dce564ddd96eb8361c86e9581111e8d7eca743119a75fd9aef06d0f92305331f",
+    "src/harness_mcp/task_manager.py": "2fe456b6f096552a4ab352b4998304be37e84c61d98fb2b1ae694a05d313b797",
+    "src/harness_mcp/worker.py": "f2b164d5bc9e87bf751b4fb3e6ce839bd1126753f7d14a5a3a3834c68dbb41d2",
+    "src/harness_mcp/workspace.py": "bf5a894ecf9cded4d255f0a507e78b10fb90c128e5255ed3d279482077b16c55"
+  }
+}

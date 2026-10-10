@@ -16,7 +16,7 @@ from typing import Callable
 import uuid
 
 from .config import AppConfig, resolve_credential
-from .errors import HarnessError
+from .errors import HarnessError, error_from_payload, error_payload
 from .redaction import redact_value
 from .supervisor import JOB_LABEL, OWNER_LABEL, RUN_LABEL, SERVICE_LABEL, read_json, safe_host_env, write_json
 
@@ -322,11 +322,26 @@ class DockerRunner:
             if usage is not None and not isinstance(usage, dict):
                 raise ValueError()
             if error is not None and (
-                not isinstance(error, dict) or set(error) != {"code", "message"}
-                or not isinstance(error["code"], str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", error["code"])
-                or not isinstance(error["message"], str)
+                not isinstance(error, dict)
+                or not {"code", "message"} <= set(error)
+                or not set(error) <= {"code", "message", "diagnostic_id", "stage", "exception_type", "details"}
+                or (set(error) != {"code", "message"} and not {"diagnostic_id", "stage", "exception_type"} <= set(error))
+                or not isinstance(error.get("code"), str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", error["code"])
+                or not isinstance(error.get("message"), str)
             ):
                 raise ValueError()
+            if error is not None:
+                restored = error_from_payload(error)
+                if restored.code == "PROTOCOL_ERROR" and error["code"] != "PROTOCOL_ERROR":
+                    raise ValueError()
+                if set(error) != {"code", "message"} and (
+                    type(error["diagnostic_id"]) is not str or restored.diagnostic_id != error["diagnostic_id"].lower()
+                    or type(error["stage"]) is not str or restored.stage != error["stage"]
+                    or type(error["exception_type"]) is not str or restored.exception_type != error["exception_type"]
+                    or ("details" in error and type(error["details"]) is not dict)
+                ):
+                    raise ValueError()
+                error = error_payload(restored, stage="model_execute")
             return {"raw_text": raw_text, "finish_reason": finish, "usage": usage, "error": error}
         except HarnessError:
             raise
@@ -456,11 +471,12 @@ class DockerRunner:
             raise
         except Exception as error:
             stopped = stopped or await self._stop_state(state)
-            code = error.code if isinstance(error, HarnessError) else "EXECUTOR_FAILED"
-            message = error.message if isinstance(error, HarnessError) else "执行器处理失败，查看脱敏诊断。"
+            payload = error_payload(error, stage="model_execute")
+            if not isinstance(error, HarnessError):
+                payload.update(code="EXECUTOR_FAILED", message="执行器处理失败，查看脱敏诊断。")
             if not stopped:
-                code, message = "TERMINATION_FAILED", "无法确认整个执行器停止，后续任务已暂停。"
-            return redact_value({"raw_text": "", "finish_reason": None, "usage": None, "error": {"code": code, "message": message}, "execution_stopped": stopped, "timing": {"elapsed_seconds": round(time.time() - started, 3)}}, (secret,))
+                payload.update(code="TERMINATION_FAILED", message="无法确认整个执行器停止，后续任务已暂停。")
+            return redact_value({"raw_text": "", "finish_reason": None, "usage": None, "error": payload, "execution_stopped": stopped, "timing": {"elapsed_seconds": round(time.time() - started, 3)}}, (secret,))
         finally:
             await asyncio.shield(self._release(state, stopped))
 

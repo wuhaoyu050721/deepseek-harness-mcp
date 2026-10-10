@@ -1,7 +1,7 @@
 """后台单任务调度；MCP 调用只读写元数据，不等待整个模型任务。"""
 
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,7 @@ import time
 import uuid
 
 from .config import AppConfig, frozen_execution, normalize_request, request_fingerprint, resolve_credential
-from .errors import HarnessError, error_payload
+from .errors import HarnessError, error_from_payload, error_payload
 from .instance_lock import InstanceLock
 from .job_store import JobStore, TERMINAL
 from .process_control import named_job_stopped, stop_process_tree
@@ -21,6 +21,17 @@ from .redaction import redact_text, redact_value
 # 停止未确认时持有管理器，避免调用方丢弃引用后文件对象被 GC 而提前解锁。
 # 显式 close 重试确认后移除；宿主退出时操作系统释放锁与 kill-on-close Job。
 _UNCONFIRMED_MANAGERS: set = set()
+
+
+class _PreflightRunner:
+    async def close(self):
+        return True
+
+    async def recover(self):
+        return True
+
+    async def run(self, *args, **kwargs):
+        raise HarnessError("PREFLIGHT_MODEL_FORBIDDEN", "预检不能调用模型。")
 
 
 def _write_preparation_record(path: Path, value: dict) -> None:
@@ -52,6 +63,8 @@ def _archive_preparation_record(path: Path) -> None:
 class TaskManager:
     def __init__(self, config: AppConfig, runner=None):
         self.config = config
+        self.config_path = None
+        self._preflight_recovery_helpers = {}
         self.injected_runner = runner is not None
         # 持续登记实际交给执行器的凭证；引用轮换后仍须精确拒绝导出新值。
         self.secrets = []
@@ -76,6 +89,10 @@ class TaskManager:
         self.wakeup = asyncio.Event()
         self.closed = False
         self.operations = set()
+        # 预检独立占有进程/数据库，但仍属于父服务的关闭责任。
+        self._preflight_tasks: set[asyncio.Task] = set()
+        self._preflight_helpers: set[TaskManager] = set()
+        self._preflight_cleanup_tasks: dict[TaskManager, asyncio.Task] = {}
         # 旧数据库存在非终态时，必须实际核对旧执行器，不能用本次空 active 列表代替。
         self.recovery_confirmed = not self.store.has_pending()
 
@@ -93,6 +110,7 @@ class TaskManager:
 
     async def _recover_owned(self):
         preparation_stopped = await self._recover_preparations()
+        preflights_stopped = await self._recover_preflight_records()
         stopped = await self.runner.recover()
         if not self.injected_runner:
             for backend in self.store.pending_backends() - {self.config.executor.backend}:
@@ -102,7 +120,32 @@ class TaskManager:
                 previous = self._make_runner(backend)
                 recovered = await previous.recover()
                 stopped = await previous.close() and recovered and stopped
-        return stopped and preparation_stopped
+        return stopped and preparation_stopped and preflights_stopped
+
+    async def _recover_preflight_records(self):
+        """恢复独立预检的精确归属；历史记录不能被当作空闲或借由新目录绕过。"""
+        from .workspace import _check_path_chain
+        roots = set()
+        try:
+            for record in self.config.data_dir.glob("preflights/*/jobs/preflight/preparation_runs/*/execution.json"):
+                root = record.parents[4]
+                if not re.fullmatch(r"[0-9a-f]{32}", root.name):
+                    return False
+                _check_path_chain(root)
+                roots.add(root)
+            roots.update(self._preflight_recovery_helpers)
+            for root in sorted(roots):
+                helper = self._preflight_recovery_helpers.get(root)
+                if helper is None:
+                    helper = TaskManager(replace(self.config, data_dir=root), _PreflightRunner())
+                    self._preflight_recovery_helpers[root] = helper
+                await helper.close()
+                if not helper.closed:
+                    return False
+                self._preflight_recovery_helpers.pop(root, None)
+        except Exception:
+            return False
+        return True
 
     async def _recover_preparations(self) -> bool:
         """任何模型后端都必须核对宿主准备/采集 Job；只查询精确归属，不操作旧 PID。"""
@@ -213,7 +256,8 @@ class TaskManager:
 
     @staticmethod
     def _receipt(job: dict) -> dict:
-        value = {"job_id":job["job_id"],"status":job["status"],"mode":job["request"].get("mode", "review"),"poll_after_seconds":1 if job["status"] not in TERMINAL else 0}
+        from .service_state import poll_interval
+        value = {"job_id":job["job_id"],"status":job["status"],"mode":job["request"].get("mode", "review"),"poll_after_seconds":poll_interval(job, time.time())}
         if job["request"].get("session_id"):
             value["session_id"] = job["request"]["session_id"]
         return value
@@ -259,13 +303,128 @@ class TaskManager:
         now = job["finished_at"] or time.time()
         return self._with_completion({**self._receipt(job),"phase":job["phase"],"elapsed_seconds":round(max(0,now-(job["started_at"] or job["created_at"])),3),"last_activity_at":job["last_activity_at"],"error":redact_value(job["error"],self.secrets),"termination_failed":job["termination_failed"]})
 
-    def result(self, job_id: str, cursor=None, page_size=20) -> dict:
-        from .report import read_report, paginate_report
+    def result(self, job_id: str, cursor=None, page_size=20, view="full") -> dict:
+        from .report import read_report, paginate_report, prepare_report_for_export, protect_verified_result_page
         job = self.store.get(job_id)
         if not job["report_id"]:
-            return self._with_completion({"job_id":job_id,"status":job["status"],"ready":False,"error":redact_value(job["error"],self.secrets),"poll_after_seconds":1 if job["status"] not in TERMINAL else 0})
+            from .report import report_quality
+            if not isinstance(view, str) or view not in {"full", "summary", "patch", "files"}:
+                raise HarnessError("INVALID_RESULT_VIEW", "结果视图必须是 full、summary、patch 或 files。")
+            return self._with_completion({**self._receipt(job),"ready":False,"view":view,"execution_status":job["status"],"quality":report_quality({"mode": job["request"].get("mode", "review")}, job["status"]),"error":redact_value(job["error"],self.secrets)})
         report = read_report(self.config.data_dir / "jobs" / job_id, max_bytes=max(2*1024*1024,self.config.limits.max_output_bytes*3),expected_report_id=job["report_id"])
-        return redact_value(self._with_completion({"ready":True,"status":job["status"],**paginate_report(report,job_id,cursor,page_size)}),self.secrets)
+        report = prepare_report_for_export(report, job["report_id"], self.secrets)
+        page = self._with_completion({"ready":True,"status":job["status"],**paginate_report(report,job_id,cursor,page_size,view, execution_status=job["status"])})
+        return protect_verified_result_page(page, report, self.secrets)
+
+    def service_info(self) -> dict:
+        from . import __version__
+        from .service_state import configuration_state
+        with self.store._lock:
+            rows = self.store.connection.execute("SELECT status,COUNT(*) FROM jobs GROUP BY status").fetchall()
+        counts = {row[0]: row[1] for row in rows}
+        return {"service_version": __version__, **configuration_state(self.config, self.config_path),
+                "default_mode": self.config.default_mode, "completion_enabled": self.config.completion.auto_continue,
+                "accepting_new_tasks": self.accepting, "queued_tasks": counts.get("queued", 0),
+                "active_tasks": sum(counts.get(key, 0) for key in ("preparing", "running", "cancelling")),
+                "active_connections": None, "connection_mode": "unattached"}
+
+    async def preflight(self, project_id, relative_paths=None, mode=None) -> dict:
+        # 准备进程和锁独立归属，绝不能借用正在执行模型任务的准备槽位。
+        request = normalize_request(self.config, project_id, "凭证预检", "preflight-" + uuid.uuid4().hex,
+                                    relative_paths, mode=mode)
+        if self.stopping:
+            raise HarnessError("SERVICE_STOPPING", "服务正在关闭，不再接受预检。")
+        task = asyncio.create_task(self._preflight(request), name="harness-preflight")
+        self._preflight_tasks.add(task)
+
+        def finished(value):
+            self._preflight_tasks.discard(value)
+            if not value.cancelled():
+                value.exception()
+
+        task.add_done_callback(finished)
+        return await task
+
+    async def _preflight(self, request) -> dict:
+        identity = uuid.uuid4().hex
+        config = replace(self.config, data_dir=self.config.data_dir / "preflights" / identity)
+        helper = TaskManager(config, _PreflightRunner())
+        self._preflight_helpers.add(helper)
+        helper.secrets = list(self.secrets)
+        try:
+            # 读取当前实际凭证用于精确比较，不保存、不调用模型。
+            try:
+                helper._register_secret(resolve_credential(asdict(self.config.model)))
+            except HarnessError:
+                pass
+            # 隔离身份由 helper 目录和 owner_id 保证；短 job_id 避免重复 UUID 拉长 Windows 路径。
+            job = {"job_id": "preflight", "request": request, "execution": frozen_execution(config, request["project_id"])}
+            result = await asyncio.wait_for(helper._snapshot(job, config.data_dir / "jobs" / "preflight", preflight_only=True), timeout=30)
+            return {"passed": True, "project_id": request["project_id"], "mode": request["mode"], **result,
+                    "config_version": self.service_info()["config_version"], "authorization_rechecked_on_submit": True}
+        except Exception as error:
+            from .errors import error_payload, error_from_payload
+            raise error_from_payload(error_payload(error, stage="preflight")) from None
+        finally:
+            cleanup = self._preflight_cleanup(helper)
+            if cleanup is not None:
+                try:
+                    await asyncio.shield(cleanup)
+                except Exception:
+                    self.accepting = False
+                    self.recovery_confirmed = False
+                    raise HarnessError("TERMINATION_FAILED", "预检辅助归属清理失败，服务已停止接受任务。", stage="preflight") from None
+            if not helper.closed:
+                self.accepting = False
+                self.recovery_confirmed = False
+                raise HarnessError("TERMINATION_FAILED", "预检进程树停止未确认，服务已停止接受任务。", stage="preflight")
+
+    def _preflight_cleanup(self, helper):
+        """重复取消不丢失清理任务；未确认的 helper 保持父服务的强引用。"""
+        if helper.closed:
+            self._preflight_helpers.discard(helper)
+            self._preflight_cleanup_tasks.pop(helper, None)
+            return None
+        task = self._preflight_cleanup_tasks.get(helper)
+        if task is None or task.done():
+            task = asyncio.create_task(helper.close(), name="harness-preflight-cleanup")
+            self._preflight_cleanup_tasks[helper] = task
+
+            def finished(value):
+                if not value.cancelled():
+                    value.exception()
+                if helper.closed:
+                    self._preflight_helpers.discard(helper)
+                    if self._preflight_cleanup_tasks.get(helper) is value:
+                        self._preflight_cleanup_tasks.pop(helper, None)
+                else:
+                    self.accepting = False
+                    self.recovery_confirmed = False
+
+            task.add_done_callback(finished)
+        return task
+
+    async def _close_preflights(self) -> bool:
+        """先收敛预检调用和辅助归属；超时不能作为停止证据或释放父锁。"""
+        deadline = asyncio.get_running_loop().time() + 15
+        current = asyncio.current_task()
+        tasks = [task for task in self._preflight_tasks if task is not current and not task.done()]
+        for task in tasks:
+            # 不再次打断已经进入 finally 的清理；其 shield 任务仍由父服务持有。
+            if not task.cancelling():
+                task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+        cleanup = [self._preflight_cleanup(helper) for helper in tuple(self._preflight_helpers)]
+        cleanup = [task for task in cleanup if task is not None and not task.done()]
+        if cleanup:
+            await asyncio.wait(cleanup, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+        confirmed = (not any(not task.done() for task in self._preflight_tasks)
+                     and not any(not helper.closed for helper in self._preflight_helpers))
+        if not confirmed:
+            self.accepting = False
+            self.recovery_confirmed = False
+        return confirmed
 
     async def cancel(self, job_id: str) -> dict:
         job = self.store.request_cancel(job_id)
@@ -302,11 +461,20 @@ class TaskManager:
             finally:
                 self.current_job_id = None
 
-    async def _snapshot(self, job: dict, directory: Path):
+    async def _snapshot(self, job: dict, directory: Path, *, preflight_only=False):
         from .workspace import Snapshot
         fields = job["execution"]
+        # 按本作业冻结的凭证引用重新登记，覆盖启动后轮换；读取源码之前完成精确扫描准备。
+        # 注入的无模型准备入口兼容仅含项目/限制的任务；真实执行器仍要求冻结模型配置。
+        if "model" in fields or not self.injected_runner:
+            try:
+                self._register_secret(resolve_credential(fields["model"]))
+            except HarnessError:
+                if not self.injected_runner:
+                    raise
         payload = {"project":fields["project"],"relative_paths":job["request"]["relative_paths"],"destination":str(directory / "snapshot"),"max_file_bytes":fields["limits"]["max_file_bytes"],"max_snapshot_bytes":fields["limits"]["max_snapshot_bytes"]}
         payload.update(mode=job["request"].get("mode", "review"), workspace_destination=str(directory / "workspace"))
+        payload.update(scan_sources=True, known_secrets=self.secrets, preflight_only=preflight_only)
         environment = {key:os.environ[key] for key in ("SYSTEMROOT","WINDIR","COMSPEC","PATH","TEMP","TMP","HOME","USERPROFILE","APPDATA","LOCALAPPDATA") if key in os.environ}
         # 挂起启动、归属进程树、恢复和记录对象之间没有 await 取消窗口。
         process = self._spawn_preparation(job, "preparing", [sys.executable,"-m","harness_mcp.snapshot_worker"],environment)
@@ -316,8 +484,8 @@ class TaskManager:
                 raise HarnessError("SNAPSHOT_FAILED", "快照准备进程异常退出。")
             result = json.loads(stdout)
             if not result["ok"]:
-                raise HarnessError(result["error"]["code"],result["error"]["message"])
-            return Snapshot.from_dict(result["snapshot"])
+                raise error_from_payload(result.get("error"))
+            return result["preflight"] if preflight_only else Snapshot.from_dict(result["snapshot"])
         finally:
             # 即使直接父进程退出，也必须确认孙进程全部停止。
             if not await self._stop_preparation(process):
@@ -341,7 +509,7 @@ class TaskManager:
                 raise HarnessError("EDIT_COLLECTION_FAILED", "副本差异收集进程异常退出。")
             result = json.loads(stdout)
             if not result["ok"]:
-                raise HarnessError(result["error"]["code"], result["error"]["message"])
+                raise error_from_payload(result.get("error"))
             return result["changes"]
         finally:
             if not await self._stop_preparation(process):
@@ -395,13 +563,16 @@ class TaskManager:
         from .review_prompt import build_review_prompt, build_edit_prompt
         job_id = job["job_id"]
         directory = self.config.data_dir / "jobs" / job_id
-        directory.mkdir(parents=True,exist_ok=True)
         deadline = job["started_at"] + job["request"]["timeout_seconds"]
         snapshot = None
         outcome = None
         mode = job["request"].get("mode", "review")
         changes = None
+        stage = "job_directory"
+        self._execution_failure = None
         try:
+            directory.mkdir(parents=True,exist_ok=True)
+            stage = "snapshot_prepare"
             preparation = self._operation(self._snapshot(job,directory))
             snapshot, stopped = await self._wait_operation(preparation,job_id,deadline)
             if not stopped:
@@ -415,7 +586,9 @@ class TaskManager:
                 else:
                     self.store.termination_failed(job_id)
                 return
+            stage = "snapshot_validate"
             await asyncio.to_thread(verify_snapshot,snapshot)
+            stage = "model_execute"
             limits = {**job["execution"]["limits"],"termination_grace_seconds":job["execution"]["executor"]["termination_grace_seconds"]}
             request = {**job["request"],"job_id":job_id,"job_dir":str(directory),"snapshot_dir":str(snapshot.source_dir),"model":job["execution"]["model"],"executor":job["execution"]["executor"],"limits":limits,"deadline_at":deadline}
             source = str(snapshot.source_dir) if job["execution"]["executor"].get("backend", "docker") == "desktop" else "/source"
@@ -435,11 +608,14 @@ class TaskManager:
             outcome, stopped = await self._wait_operation(running,job_id,deadline)
             if not stopped:
                 return
+            stage = "worker_response"
             if outcome is not None and not outcome.get("execution_stopped",False):
                 if not await self._terminate(job_id):
                     self.store.termination_failed(job_id)
                     return
+            stage = "post_model_snapshot_validate"
             await asyncio.to_thread(verify_snapshot,snapshot)
+            stage = "worker_response"
             if outcome is None:
                 outcome = {"raw_text":"","finish_reason":None,"usage":None,"error":{"code":"TASK_STOPPED","message":"任务已停止，未收到完整结果。"}}
             if not isinstance(outcome,dict) or not isinstance(outcome.get("raw_text",""),str) or (outcome.get("finish_reason") is not None and not isinstance(outcome["finish_reason"],str)) or (outcome.get("error") is not None and not isinstance(outcome["error"],dict)):
@@ -454,7 +630,10 @@ class TaskManager:
             if time.time() >= deadline:
                 self.store.request_cancel(job_id,"timed_out")
                 outcome["error"] = {"code":"TIMED_OUT","message":"总任务时限已到，执行器已停止。"}
+            if outcome.get("error"):
+                outcome["error"] = error_payload(error_from_payload(outcome["error"]), stage="model_execute")
             if mode == "edit" and not outcome.get("error") and self.store.get(job_id)["status"] != "cancelling":
+                stage = "changes_collect"
                 self.store.activity(job_id, "collecting_changes")
                 collection = self._operation(self._edit_changes(job, snapshot, workspace))
                 changes, stopped = await self._wait_operation(collection, job_id, deadline)
@@ -463,23 +642,27 @@ class TaskManager:
                 # 停止优先于晚到的差异；被取消或超时的修改不发布为可合入结果。
                 if self.store.get(job_id)["status"] == "cancelling":
                     changes = None
-                    outcome["error"] = {"code": "TASK_STOPPED", "message": "任务已停止，副本修改没有发布为可合入结果。"}
+                    outcome["error"] = error_payload(HarnessError("TASK_STOPPED", "任务已停止，副本修改没有发布为可合入结果。"), stage="changes_collect")
+            stage = "report_build"
             outcome = redact_value(outcome,self.secrets)
             report = build_report(job_id,job["request"]["project_id"],snapshot,outcome.get("raw_text",""),outcome.get("finish_reason"),usage=outcome.get("usage"),timing=outcome.get("timing"),error=outcome.get("error"),max_output_bytes=limits["max_output_bytes"],mode=mode,changes=changes,secrets=tuple(self.secrets))
-            # 真实代码/差异若被脱敏改变，就不能再按原哈希合入；拒绝而不是静默改补丁。
-            redacted_report = redact_value(report, self.secrets)
-            if mode == "edit" and any(redacted_report.get(key) != report.get(key) for key in ("changes", "patch_text", "change_set_id")):
-                raise HarnessError("EDIT_SECRET_DETECTED", "实际修改包含需脱敏的数据，不能生成可合入差异。")
+            # 以实际快照重验机械来源；自然字段仍强脱敏，合法源码保持原始字节。
+            from .report import redact_report_for_save
+            redacted_report = redact_report_for_save(report, snapshot, self.secrets, max_output_bytes=limits["max_output_bytes"])
+            stage = "report_save"
             saved = save_report(redacted_report,directory)
             # 结果处理同样纳入总期限；若保存跨界，保留报告并标注超时。
             if time.time() >= deadline and self.store.get(job_id)["status"] != "cancelling":
                 self.store.request_cancel(job_id,"timed_out")
-                outcome["error"] = report["error"] = {"code":"TIMED_OUT","message":"结果处理超过总任务时限，执行器已停止。"}
+                outcome["error"] = report["error"] = error_payload(HarnessError("TIMED_OUT", "结果处理超过总任务时限，执行器已停止。"), stage="report_save")
                 report["limitations"].append("结果处理超过总任务时限，不能视作完整成功任务。")
                 if mode == "edit":
+                    stage = "report_build"
                     report = build_report(job_id,job["request"]["project_id"],snapshot,outcome.get("raw_text",""),outcome.get("finish_reason"),usage=outcome.get("usage"),timing=outcome.get("timing"),error=outcome.get("error"),max_output_bytes=limits["max_output_bytes"],mode=mode,changes=None,secrets=tuple(self.secrets))
+                stage = "report_save"
                 saved = save_report(redact_value(report,self.secrets),directory)
             status = "succeeded" if outcome.get("finish_reason")=="completed" and not outcome.get("error") else "failed"
+            stage = "finish_commit"
             self.store.finish(job_id,status,error=outcome.get("error"),report_id=saved["report_id"])
         except asyncio.CancelledError:
             self.store.request_cancel(job_id,"interrupted")
@@ -489,10 +672,16 @@ class TaskManager:
                 self.store.termination_failed(job_id)
             raise
         except Exception as error:
-            if await self._terminate(job_id):
-                self.store.finish(job_id,"failed",error=redact_value(error_payload(error),self.secrets))
+            # 先锁定原始失败阶段；停止确认可能再次失败，不能覆盖首次诊断。
+            self._execution_failure = redact_value(error_payload(error, stage=stage), self.secrets)
+            try:
+                stopped = await self._terminate(job_id)
+            except Exception:
+                stopped = False
+            if stopped:
+                self.store.finish(job_id,"failed",error=self._execution_failure)
             else:
-                self.store.termination_failed(job_id)
+                self.store.termination_failed(job_id, error=self._execution_failure)
 
     async def close(self) -> None:
         if self.closed:
@@ -502,6 +691,7 @@ class TaskManager:
         self.wakeup.set()
         stopped = False
         try:
+            preflights_stopped = await self._close_preflights()
             if self.current_job_id:
                 self.store.request_cancel(self.current_job_id,"interrupted")
             if self.scheduler:
@@ -521,7 +711,7 @@ class TaskManager:
             records_stopped = await self._recover_preparations()
             if not self.recovery_confirmed:
                 self.recovery_confirmed = await self._recover_owned()
-            stopped = await self.runner.close() and preparation_stopped and records_stopped and self.recovery_confirmed
+            stopped = await self.runner.close() and preparation_stopped and records_stopped and self.recovery_confirmed and preflights_stopped
             if stopped:
                 pending = list(self.operations)
                 for operation in pending:

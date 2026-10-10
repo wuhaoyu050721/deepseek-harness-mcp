@@ -18,7 +18,7 @@ import stat
 import uuid
 from typing import Any
 
-from .redaction import redact_text as redact_diagnostic
+from .source_secrets import scan_deterministic, scan_source
 from .workspace import (
     Snapshot, SnapshotError, _check_path_chain, _excluded_reason,
     _handle_final_path, normalize_relative_path,
@@ -306,11 +306,13 @@ def _text(data: bytes) -> str:
         raise _error("EDIT_NON_UTF8", "修改文件不是合法 UTF-8，拒绝生成可合并差异。") from exc
 
 
-def _no_secret(text: str, secrets: tuple[str, ...]) -> None:
-    # 两条保存链必须一致：完整可合并内容不能在保存后才被脱敏改变哈希。
-    from .report import redact_text as redact_report
-    if redact_report(text, secrets) != text or redact_diagnostic(text, secrets, max_chars=max(4096, len(text) * 2 + 1024)) != text:
-        raise _error("EDIT_SECRET_DETECTED", "修改内容或差异命中凭证规则，拒绝回传可合并内容。")
+def _no_secret(text: str, secrets: tuple[str, ...], *, relative_path: str = "source", source: bool = False) -> None:
+    # 真实文件按语法分类；路径与带 +/- 前缀的 diff 只检查确定性凭证。
+    matches = scan_source(relative_path, text, secrets) if source else scan_deterministic(text, secrets, relative_path)
+    if matches:
+        error = _error("EDIT_SECRET_DETECTED", "修改内容或差异命中凭证规则，拒绝回传可合并内容。")
+        error.details = {"matches": matches[:64], "total_matches": len(matches), "truncated": len(matches) > 64}
+        raise error
 
 
 def _diff(path: str, before: bytes | None, after: bytes | None) -> str:
@@ -392,8 +394,11 @@ def collect_edit_changes(
             raise _error("EDIT_EXCLUDED_PATH", "拒绝修改或创建已排除的源路径。")
         diff = _diff(path, old, new)
         after_text = None if new is None else _text(new)
-        for text in (path, diff, after_text or ""):
-            _no_secret(text, secrets)
+        _no_secret(path, secrets, relative_path=path)
+        _no_secret(diff, secrets, relative_path=path)
+        for content in (old, new):
+            if content is not None:
+                _no_secret(_text(content), secrets, relative_path=path, source=True)
         change = {
             "path": path, "change_type": "add" if old is None else "delete" if new is None else "modify",
             "before_sha256": None if old is None else hashlib.sha256(old).hexdigest(),

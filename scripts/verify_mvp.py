@@ -1,4 +1,4 @@
-"""正式四工具真实 stdio 验证：缺失桌面安装失败报告、缺失 Docker 恢复阻断。
+"""基础六工具真实 stdio 验证：缺失桌面安装失败报告、缺失 Docker 恢复阻断。
 
 此记录仅验证官方 MCP SDK 客户端和独立 JSON-RPC 通道，不等同于 Codex、
 Claude Code、真实 Harness、真实容器或付款模型的验收。总时限60秒。
@@ -22,23 +22,29 @@ from typing import Any
 
 from mcp import Client, StdioServerParameters
 
-TOOLS = {"harness_submit", "harness_status", "harness_result", "harness_cancel"}
+TOOLS = {"harness_submit", "harness_status", "harness_result", "harness_cancel", "harness_service_info", "harness_preflight"}
 REQUIRED = {
     "harness_submit": {"project_id", "prompt", "client_request_id"},
     "harness_status": {"job_id"}, "harness_result": {"job_id"}, "harness_cancel": {"job_id"},
+    "harness_service_info": set(), "harness_preflight": {"project_id"},
 }
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 MISSING_DESKTOP_ERROR = "DESKTOP_NOT_FOUND" if os.name == "nt" else "DESKTOP_PLATFORM_UNSUPPORTED"
 
 
 def validate_tools_contract(tools: list[dict[str, Any]]) -> None:
-    assert {tool["name"] for tool in tools} == TOOLS, "四工具发现集合不符合首版契约"
-    assert len(tools) == 4, "存在重复或额外工具"
+    assert {tool["name"] for tool in tools} == TOOLS, "基础六工具发现集合不符合契约"
+    assert len(tools) == len(TOOLS), "存在重复或额外工具"
     for tool in tools:
         schema = tool["inputSchema"]
         assert set(schema.get("required", [])) == REQUIRED[tool["name"]], tool["name"]
         assert "api_key" not in schema.get("properties", {}), "工具不得接收明文凭证"
         assert "provider" not in schema.get("properties", {}), "工具不得更换模型路由"
+    schemas = {tool["name"]: tool["inputSchema"] for tool in tools}
+    view = schemas["harness_result"]["properties"]["view"]
+    assert view["default"] == "full" and set(view["enum"]) == {"full", "summary", "patch", "files"}, "结果视图契约不一致"
+    assert not schemas["harness_service_info"].get("properties"), "服务信息不得接收配置路径或凭证"
+    assert set(schemas["harness_preflight"]["properties"]) == {"project_id", "relative_paths", "mode"}, "预检只能使用已授权项目/相对范围/模式"
 
 
 def fixture_env(root: Path) -> dict[str, str]:
@@ -334,7 +340,7 @@ async def verify(root: Path) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="四工具 MCP stdio 验证（人工仓库、无模型调用）")
+    parser = argparse.ArgumentParser(description="基础六工具 MCP stdio 验证（人工仓库、无模型调用）")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]

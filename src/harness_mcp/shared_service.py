@@ -44,7 +44,9 @@ _NONSECRET_ENVIRONMENT = frozenset({
 _RPC_ARGUMENTS = {
     "submit": frozenset({"project_id", "prompt", "client_request_id", "relative_paths", "timeout_seconds", "mode", "completion_origin"}),
     "status": frozenset({"job_id"}),
-    "result": frozenset({"job_id", "cursor", "page_size"}),
+    "result": frozenset({"job_id", "cursor", "page_size", "view"}),
+    "service_info": frozenset(),
+    "preflight": frozenset({"project_id", "relative_paths", "mode"}),
     "cancel": frozenset({"job_id"}),
     "session_open": frozenset({"project_id", "client_request_id", "title", "mode", "relative_paths"}),
     "session_send": frozenset({"session_id", "prompt", "client_request_id", "timeout_seconds", "completion_origin"}),
@@ -132,12 +134,12 @@ class _SharedService:
             if not future.done():
                 future.cancel()
 
-    def _safe_error(self, error: Exception) -> dict:
+    def _safe_error(self, error: Exception, *, stage="shared_rpc") -> dict:
         # IPC 令牌和模型凭证只留在受信内存；任何错误都不得回传原始异常。
         values = [self.token, *getattr(self.manager, "secrets", ())]
         if self.credential:
             values.append(self.credential)
-        return redact_value(error_payload(error), values)
+        return redact_value(error_payload(error, stage=stage), values)
 
     def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.connections >= MAX_CONNECTIONS or self.stopping:
@@ -231,11 +233,21 @@ class _SharedService:
             result = getattr(self.manager, method)(**arguments)
             if inspect.isawaitable(result):
                 result = await result
+            if method == "service_info":
+                result = {**result, "active_connections": self.sessions,
+                          "pending_connections": max(0, self.connections - self.sessions),
+                          "connection_mode": "shared", "runtime_version": self.config_digest}
             # 会话标题等成功字段也可能回显用户输入，统一应用精确凭证保护。
             protected = [self.token, *getattr(self.manager, "secrets", ())]
             if self.credential:
                 protected.append(self.credential)
-            return {"id": request_id, "ok": True, "result": redact_value(result, protected)}
+            if method == "result":
+                # 仅真实 result 的进程内来源标记可保留源码；模型 JSON 同名字段无效。
+                from .redaction import redact_verified_source_payload
+                result = redact_verified_source_payload(result, protected)
+            else:
+                result = redact_value(result, protected)
+            return {"id": request_id, "ok": True, "result": result}
         except Exception as error:
             return {"id": request_id, "ok": False, "error": self._safe_error(error)}
 
@@ -267,7 +279,7 @@ class _SharedService:
             pass
         except Exception as error:
             with suppress(Exception):
-                await self._write(writer, {"version": 1, "ready": False, "error": self._safe_error(error)}, max_bytes=AUTH_MAX_BYTES)
+                await self._write(writer, {"version": 1, "ready": False, "error": self._safe_error(error, stage="shared_rpc" if attached else "shared_attach")}, max_bytes=AUTH_MAX_BYTES)
         finally:
             if origin is not None and self.channels.get(origin["connection_id"], (None, None))[1] is writer:
                 self.channels.pop(origin["connection_id"], None)
@@ -329,6 +341,7 @@ async def serve(
     idle_seconds: float = 30,
     manager_factory=None,
     nonsecret_environment: dict | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """启动一个独立后台；前端断开不触发管理器关闭或任务取消。"""
     from .shared_bootstrap import prepare_private_runtime, write_private_json
@@ -355,6 +368,7 @@ async def serve(
     state = None
     try:
         manager = manager_factory(config)
+        manager.config_path = config_path
         await manager.start()
         state = _SharedService(config, manager, token, config_digest, float(idle_seconds))
         if config.completion.auto_continue:
@@ -423,9 +437,10 @@ def main() -> None:
             raise HarnessError("SHARED_CONFIG_MISMATCH", "共享后台启动配置与已授权配置不同。")
         asyncio.run(serve(config, args.bootstrap.parent, bootstrap["token"], digest,
                           idle_seconds=bootstrap.get("idle_seconds", 30),
-                          nonsecret_environment=bootstrap.get("nonsecret_environment", {})))
+                          nonsecret_environment=bootstrap.get("nonsecret_environment", {}),
+                          config_path=args.config.resolve()))
     except Exception as error:
-        payload = error_payload(error)
+        payload = error_payload(error, stage="startup")
         known = {"INSTANCE_LOCKED", "INVALID_CONFIG", "SHARED_CONFIG_MISMATCH", "SHARED_PROTOCOL_ERROR",
                  "SHARED_PRIVATE_PATH_UNSAFE", "SHARED_RUNTIME_UNSAFE", "DESKTOP_OS_UNSUPPORTED",
                  "SHARED_STORAGE_UNSAFE", "DESKTOP_RUNTIME_UNAVAILABLE", "SDK_VERSION_UNSUPPORTED"}
@@ -437,8 +452,9 @@ def main() -> None:
                     "version": 1, "pid": os.getpid(), "parent_pid": os.getppid(),
                     "startup_id": bootstrap["startup_id"], "config_digest": bootstrap["config_digest"],
                     "code": code, "message": message,
+                    **{key: payload[key] for key in ("diagnostic_id", "stage", "exception_type")},
                 })
-        print(f"{code}: {message}", file=sys.stderr)
+        print(f"{code}: {message} [diagnostic_id={payload['diagnostic_id']}, stage={payload['stage']}, exception_type={payload['exception_type']}]", file=sys.stderr)
         raise SystemExit(1) from None
 
 

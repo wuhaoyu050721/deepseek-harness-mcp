@@ -327,7 +327,8 @@ def _remove_owned_temp(path: Path, parent: Path) -> None:
 def create_snapshot(
     project: Any, relative_paths: list[str] | None, destination: Path,
     max_file_bytes: int = 2097152, max_total_bytes: int = 104857600,
-) -> Snapshot:
+    *, scan_sources: bool = False, known_secrets=(), preflight_only: bool = False,
+) -> Snapshot | dict:
     if isinstance(max_file_bytes, bool) or isinstance(max_total_bytes, bool) or not isinstance(max_file_bytes, int) or not isinstance(max_total_bytes, int) or min(max_file_bytes, max_total_bytes) < 1:
         raise SnapshotError("INVALID_LIMIT", "快照大小上限必须为正整数。")
     if relative_paths is not None and not isinstance(relative_paths, list):
@@ -401,6 +402,23 @@ def create_snapshot(
     metadata = {"schema_version": 1, "project_id": project.id, "manifest": manifest, "git_commit": before.commit, "git_dirty": git_dirty, "review_scope": scope, "excluded": excluded}
     serialized = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     snapshot_id = hashlib.sha256(serialized).hexdigest()
+    if scan_sources or preflight_only:
+        from .source_secrets import scan_source
+        matches = []
+        total_matches = 0
+        for relative, data in contents.items():
+            found = scan_source(relative, data, known_secrets)
+            total_matches += len(found)
+            matches.extend(found[:max(0, 20 - len(matches))])
+        if total_matches:
+            raise SnapshotError("SOURCE_SECRET_DETECTED", "授权源码的凭证预检未通过，请按脱敏位置检查。",
+                                {"matches": matches, "total_matches": total_matches,
+                                 "truncated": total_matches > len(matches)})
+    if preflight_only:
+        # 同样核对授权、读取边界和真实字节，但不生成源码副本或模型任务。
+        return {"snapshot_id": snapshot_id, "checked_files": len(manifest),
+                "checked_bytes": total, "matches": [], "total_matches": 0,
+                "truncated": False, "model_called": False}
     destination = Path(os.path.abspath(destination))
     _check_path_chain(destination)
     if destination.exists():

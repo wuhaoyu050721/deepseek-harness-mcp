@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from . import __version__
 from .config import AppConfig, load_config
-from .errors import error_payload
+from .errors import HarnessError, error_payload
 from .redaction import redact_value
 from .task_manager import TaskManager
 
@@ -25,10 +25,11 @@ class ToolReply(BaseModel):
     error: dict[str, Any] | None = None
 
 
-def create_server(config: AppConfig, runner=None, *, manager=None, sessions: bool = False, claude_channel=None) -> MCPServer:
+def create_server(config: AppConfig, runner=None, *, manager=None, sessions: bool = False, claude_channel=None, config_path: Path | None = None) -> MCPServer:
     # 直接模式持有任务管理器；共享模式注入只连接后台的会话代理。
     if manager is None:
         manager = TaskManager(config, runner)
+        manager.config_path = config_path
     if claude_channel is not None and hasattr(manager, "enable_channel"):
         async def channel_callback(payload):
             return await claude_channel.send_completion(payload["origin"], payload["prompt"], payload["call_id"])
@@ -98,7 +99,9 @@ def create_server(config: AppConfig, runner=None, *, manager=None, sessions: boo
 
     def reply(data=None, error=None):
         if error is not None:
-            return ToolReply(ok=False, error=redact_value(error_payload(error),manager.secrets))
+            # 保留旧业务错误的两字段接口；未知异常和已有诊断使用固定入口阶段。
+            stage = None if isinstance(error, HarnessError) and error.code != "INTERNAL_ERROR" and not error.details else "tool_request"
+            return ToolReply(ok=False, error=redact_value(error_payload(error, stage=stage),manager.secrets))
         return ToolReply(ok=True, **data)
 
     @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
@@ -122,10 +125,31 @@ def create_server(config: AppConfig, runner=None, *, manager=None, sessions: boo
             return reply(error=error)
 
     @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    async def harness_result(job_id: str, cursor: str | None = None, page_size: int = 20) -> ToolReply:
-        """读取摘要、问题、报告文本及 edit 实际差异/后内容片段；沿 next_cursor 取完整修改，尚未保存时 ready=false。"""
+    async def harness_result(job_id: str, cursor: str | None = None, page_size: int = 20, view: Literal["full", "summary", "patch", "files"] = "full") -> ToolReply:
+        """按需读取 summary、patch、files 或兼容 full；游标绑定视图，质量与执行状态独立。"""
         try:
-            value = manager.result(job_id,cursor,page_size)
+            value = manager.result(job_id,cursor,page_size,view)
+            return reply(await value if inspect.isawaitable(value) else value)
+        except Exception as error:
+            return reply(error=error)
+
+    @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+    async def harness_service_info() -> ToolReply:
+        """查看当前/磁盘配置版本、是否需要重连，以及活动连接、排队和活动任务数量。"""
+        try:
+            value = manager.service_info()
+            value = await value if inspect.isawaitable(value) else value
+            if isinstance(manager, TaskManager):
+                value = {**value, "active_connections": 1, "connection_mode": "direct"}
+            return reply(value)
+        except Exception as error:
+            return reply(error=error)
+
+    @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+    async def harness_preflight(project_id: str, relative_paths: list[str] | None = None, mode: Literal["review", "edit"] = config.default_mode) -> ToolReply:
+        """提交前核对授权源码的凭证规则，失败仅返回脱敏路径/行号/规则；不调用模型、不修改项目。"""
+        try:
+            value = manager.preflight(project_id, relative_paths, mode)
             return reply(await value if inspect.isawaitable(value) else value)
         except Exception as error:
             return reply(error=error)
@@ -227,10 +251,10 @@ def main() -> None:
             from .shared_client import SharedClient
             create_server(config, manager=SharedClient(config, config_path=config_path), sessions=True, claude_channel=channel).run()
         else:
-            create_server(config, claude_channel=channel).run()
+            create_server(config, claude_channel=channel, config_path=config_path).run()
     except Exception as error:
-        payload = error_payload(error)
-        print(f"{payload['code']}: {payload['message']}",file=sys.stderr)
+        payload = error_payload(error, stage="startup")
+        print(f"{payload['code']}: {payload['message']} [diagnostic_id={payload['diagnostic_id']}, stage={payload['stage']}, exception_type={payload['exception_type']}]",file=sys.stderr)
         raise SystemExit(1) from None
 
 

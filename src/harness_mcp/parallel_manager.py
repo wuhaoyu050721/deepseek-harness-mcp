@@ -6,8 +6,9 @@ import asyncio
 from contextlib import suppress
 
 from .config import frozen_execution, normalize_request, request_fingerprint
-from .errors import HarnessError
+from .errors import HarnessError, error_from_payload, error_payload
 from .job_store import TERMINAL
+from .redaction import redact_value
 from .task_manager import TaskManager, _UNCONFIRMED_MANAGERS
 
 
@@ -114,21 +115,27 @@ class ParallelTaskManager(TaskManager):
         task = context.execution_task
         if task is not None and not task.done():
             return False
+        failure = getattr(context, "_execution_failure", None)
         if task is not None and not task.cancelled():
-            with suppress(BaseException):
-                task.exception()
+            execution_error = task.exception()
+            if execution_error is not None and failure is None:
+                failure = redact_value(error_payload(execution_error, stage="worker_response"), self.secrets)
+                context._execution_failure = failure
         try:
             stopped = await context.close_owned()
         except Exception:
             stopped = False
         if not stopped:
             context.ownership_failed = True
-            self.store.termination_failed(job_id)
+            self.store.termination_failed(job_id, error=failure)
             self.accepting = False
             return False
         context.ownership_failed = False
         if self.store.get(job_id)["status"] not in TERMINAL:
-            self.store.finish(job_id, "interrupted")
+            if failure is not None:
+                self.store.finish(job_id, "failed", error=redact_value(error_payload(error_from_payload(failure)), self.secrets))
+            else:
+                self.store.finish(job_id, "interrupted")
         if self.contexts.get(job_id) is context:
             self.contexts.pop(job_id)
         self._refresh_acceptance()
@@ -150,9 +157,7 @@ class ParallelTaskManager(TaskManager):
                         context = _ExecutionContext(self, job_id)
                     except Exception as error:
                         # 构造未产生执行进程；由同一 store 保存稳定错误，不重放任务。
-                        from .errors import error_payload
-                        from .redaction import redact_value
-                        self.store.finish(job_id, "failed", error=redact_value(error_payload(error), self.secrets))
+                        self.store.finish(job_id, "failed", error=redact_value(error_payload(error, stage="job_create"), self.secrets))
                         continue
                     self.contexts[job_id] = context
                     context.execution_task = asyncio.create_task(context._execute(job), name=f"harness-job-{job_id}")
@@ -188,6 +193,7 @@ class ParallelTaskManager(TaskManager):
         self.wakeup.set()
         stopped = False
         try:
+            preflights_stopped = await self._close_preflights()
             if self.scheduler is not None:
                 with suppress(Exception, asyncio.CancelledError):
                     await self.scheduler
@@ -211,7 +217,7 @@ class ParallelTaskManager(TaskManager):
                 # 直到所有独立上下文停止，父级才能扫描历史和关闭全局执行器。
                 recovered = await super()._recover_owned()
                 self.recovery_confirmed = recovered
-                stopped = await self.runner.close() and recovered
+                stopped = await self.runner.close() and recovered and preflights_stopped
             if stopped:
                 pending_operations = list(self.operations)
                 for operation in pending_operations:

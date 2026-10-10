@@ -28,7 +28,7 @@ def main() -> None:
         )
         result = {"ok": True, "changes": changes}
     except Exception as error:
-        result = {"ok": False, "error": error_payload(error)}
+        result = {"ok": False, "error": error_payload(error, stage="changes_collect")}
     sys.stdout.buffer.write((json.dumps(result, ensure_ascii=False) + "\n").encode("utf-8"))
     sys.stdout.buffer.flush()
 

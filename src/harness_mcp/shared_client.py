@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from .config import AppConfig
-from .errors import HarnessError
+from .errors import HarnessError, error_from_payload
 
 AUTH_MAX_BYTES = 8192
 RPC_MAX_BYTES = 16 * 1024 * 1024
@@ -144,9 +144,11 @@ class SharedClient:
             if ready.get("ready") is not True or ready.get("version") != 1:
                 error = ready.get("error", {})
                 code = error.get("code", "SHARED_BACKEND_UNAVAILABLE") if isinstance(error, dict) else "SHARED_BACKEND_UNAVAILABLE"
+                restored = error_from_payload(error)
+                diagnostic = {key: getattr(restored, key) for key in ("diagnostic_id", "stage", "exception_type", "details") if getattr(restored, key) is not None}
                 if code == "SHARED_CREDENTIAL_MISMATCH":
-                    raise HarnessError(code, "现有共享服务使用不同的模型凭证，请等待服务空闲退出后重新连接。")
-                raise HarnessError("SHARED_BACKEND_UNAVAILABLE", "共享服务未完成初始化。")
+                    raise HarnessError(code, "现有共享服务使用不同的模型凭证，请等待服务空闲退出后重新连接。", **diagnostic)
+                raise HarnessError("SHARED_BACKEND_UNAVAILABLE", "共享服务未完成初始化。", **diagnostic)
             self._reader_task = asyncio.create_task(self._read_loop(), name="harness-shared-replies")
         except BaseException:
             await self.close()
@@ -245,7 +247,10 @@ class SharedClient:
                 error = reply.get("error")
                 if not isinstance(error, dict) or not isinstance(error.get("code"), str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,100}", error["code"]) or not isinstance(error.get("message"), str):
                     raise HarnessError("SHARED_PROTOCOL_INVALID", "共享服务响应格式无效。")
-                raise HarnessError(error["code"], error["message"])
+                restored = error_from_payload(error)
+                if restored.code == "PROTOCOL_ERROR" and error["code"] != "PROTOCOL_ERROR":
+                    raise HarnessError("SHARED_PROTOCOL_INVALID", "共享服务响应格式无效。")
+                raise restored
             except (OSError, asyncio.IncompleteReadError, asyncio.TimeoutError):
                 await self.close()
                 raise HarnessError("SHARED_CONNECTION_LOST", "共享服务连接中断，操作结果尚不明确；重新连接后用原请求编号或作业编号查询，不能重复创建任务。") from None
@@ -269,8 +274,15 @@ class SharedClient:
     async def status(self, job_id):
         return await self._call("status", {"job_id": job_id})
 
-    async def result(self, job_id, cursor=None, page_size=20):
-        return await self._call("result", dict(job_id=job_id, cursor=cursor, page_size=page_size))
+    async def result(self, job_id, cursor=None, page_size=20, view="full"):
+        return await self._call("result", dict(job_id=job_id, cursor=cursor, page_size=page_size, view=view))
+
+    async def service_info(self):
+        return await self._call("service_info", {})
+
+    async def preflight(self, project_id, relative_paths=None, mode=None):
+        mode = self.config.default_mode if mode is None else mode
+        return await self._call("preflight", dict(project_id=project_id, relative_paths=relative_paths, mode=mode))
 
     async def cancel(self, job_id):
         return await self._call("cancel", {"job_id": job_id})

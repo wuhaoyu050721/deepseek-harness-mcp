@@ -13,7 +13,7 @@ import re
 import time
 from typing import Callable
 
-from .errors import HarnessError
+from .errors import HarnessError, error_payload
 
 
 SDK_VERSION = "0.1.5rc1"
@@ -120,18 +120,18 @@ def _outcome_error(collector: ActivityCollector) -> dict | None:
 
 def _safe_error(error: Exception) -> dict:
     # 官方异常可能带 stderr、HTTP 文本或环境变量。只给固定消息，不序列化 str(error)。
+    payload = error_payload(error, stage="model_execute")
     if isinstance(error, TimeoutError):
-        return {"code": "SDK_REQUEST_TIMEOUT", "message": "Harness SDK 回执超时。"}
-    if isinstance(error, (ImportError, ModuleNotFoundError)):
-        return {"code": "SDK_UNAVAILABLE", "message": "Worker 未安装锁定的 Harness SDK。"}
-    if isinstance(error, AdapterProtocolError):
-        return {"code": "SDK_PROTOCOL_ERROR", "message": "Harness 通知未满足活动边界协议。"}
-    if isinstance(error, HarnessError):
-        return {"code": error.code, "message": error.message}
-    from .desktop_launcher import DesktopLaunchError
-    if isinstance(error, DesktopLaunchError):
-        return {"code": error.code, "message": error.message}
-    return {"code": "HARNESS_RUNTIME_ERROR", "message": "Harness 运行失败；原始诊断未进入报告。"}
+        payload.update(code="SDK_REQUEST_TIMEOUT", message="Harness SDK 回执超时。")
+    elif isinstance(error, (ImportError, ModuleNotFoundError)):
+        payload.update(code="SDK_UNAVAILABLE", message="Worker 未安装锁定的 Harness SDK。")
+    elif isinstance(error, AdapterProtocolError):
+        payload.update(code="SDK_PROTOCOL_ERROR", message="Harness 通知未满足活动边界协议。")
+    else:
+        from .desktop_launcher import DesktopLaunchError
+        if not isinstance(error, (HarnessError, DesktopLaunchError)):
+            payload.update(code="HARNESS_RUNTIME_ERROR", message="Harness 运行失败；原始诊断未进入报告。")
+    return payload
 
 
 def run_harness(

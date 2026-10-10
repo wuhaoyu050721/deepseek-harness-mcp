@@ -24,7 +24,7 @@ class ServerContractTests(unittest.IsolatedAsyncioTestCase):
         with patch("harness_mcp.server.TaskManager", return_value=self.manager):
             self.server = create_server(AppConfig(Path("unused-by-mocked-manager")))
 
-    async def test_exact_four_tools_and_required_request_id(self):
+    async def test_exact_six_base_tools_and_required_request_id(self):
         tools = [tool.model_dump(by_alias=True) for tool in await self.server.list_tools()]
         verification.validate_tools_contract(tools)
         submit = next(tool for tool in tools if tool["name"] == "harness_submit")
@@ -65,7 +65,7 @@ class ServerContractTests(unittest.IsolatedAsyncioTestCase):
         proxy.status.assert_awaited_once_with("shared-one")
         response = await server.call_tool("harness_result", {"job_id": "missing"})
         self.assertEqual(response.structured_content["error"], {"code": "JOB_NOT_FOUND", "message": "[REDACTED]"})
-        proxy.result.assert_awaited_once_with("missing", None, 20)
+        proxy.result.assert_awaited_once_with("missing", None, 20, "full")
 
     async def test_shared_session_schema_and_followup_dispatch(self):
         proxy = MagicMock()
@@ -75,7 +75,7 @@ class ServerContractTests(unittest.IsolatedAsyncioTestCase):
         proxy.session_list = AsyncMock(return_value={"sessions": []})
         server = create_server(AppConfig(Path("unused-sessions")), manager=proxy, sessions=True)
         tools = await server.list_tools()
-        self.assertEqual(len(tools), 7)
+        self.assertEqual(len(tools), 9)
         self.assertTrue({"harness_session_open", "harness_session_send", "harness_session_list"} <= {tool.name for tool in tools})
         response = await server.call_tool("harness_session_open", {"project_id": "demo", "client_request_id": "open-one"})
         self.assertEqual(response.structured_content["session_id"], "agent-one")

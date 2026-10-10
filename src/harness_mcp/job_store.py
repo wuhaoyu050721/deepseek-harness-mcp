@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 
-from .errors import HarnessError
+from .errors import HarnessError, error_from_payload, error_payload
 
 
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "timed_out", "interrupted"})
@@ -251,18 +251,40 @@ class JobStore:
             self._completion_event(cursor, job_id)
             return self._decode(cursor.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone())
 
-    def termination_failed(self, job_id: str) -> None:
+    def termination_failed(self, job_id: str, *, error=None) -> None:
         with self.transaction() as cursor:
-            cursor.execute("UPDATE jobs SET status='cancelling',phase='termination_failed',termination_failed=1,cancel_reason=COALESCE(cancel_reason,'interrupted'),error_json=?,last_activity_at=? WHERE job_id=? AND status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')", (json.dumps({"code":"TERMINATION_FAILED","message":"执行器停止尚未确认，后续执行已暂停。"},ensure_ascii=False),time.time(),job_id))
+            retained = {"code":"TERMINATION_FAILED","message":"执行器停止尚未确认，后续执行已暂停。"}
+            row = cursor.execute("SELECT error_json FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+            try:
+                previous = json.loads(row["error_json"]) if row is not None and row["error_json"] else None
+            except (TypeError, ValueError):
+                previous = None
+            # 重复停止或失败恢复不能覆盖最早的有效诊断；旧无诊断调用保持固定文案。
+            for candidate in (previous, error):
+                if type(candidate) is dict and type(candidate.get("diagnostic_id")) is str and re.fullmatch(r"[0-9a-fA-F]{32}", candidate["diagnostic_id"]):
+                    restored = error_from_payload(candidate)
+                    if restored.diagnostic_id == candidate["diagnostic_id"].lower():
+                        retained = error_payload(restored)
+                        break
+            cursor.execute("UPDATE jobs SET status='cancelling',phase='termination_failed',termination_failed=1,cancel_reason=COALESCE(cancel_reason,'interrupted'),error_json=?,last_activity_at=? WHERE job_id=? AND status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')", (json.dumps(retained,ensure_ascii=False),time.time(),job_id))
 
     def recover_interrupted(self, stopped: bool) -> None:
         with self.transaction() as cursor:
             now = time.time()
             if stopped:
-                interrupted = [row[0] for row in cursor.execute("SELECT job_id FROM jobs WHERE status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')").fetchall()]
-                cursor.execute("UPDATE jobs SET status='interrupted',phase='interrupted',finished_at=?,last_activity_at=?,termination_failed=0,error_json=? WHERE status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')", (now,now,json.dumps({"code":"SERVICE_RESTARTED","message":"服务重启，旧任务未自动重放。"},ensure_ascii=False)))
-                for job_id in interrupted:
-                    self._completion_event(cursor, job_id)
+                interrupted = cursor.execute("SELECT job_id,error_json FROM jobs WHERE status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')").fetchall()
+                for row in interrupted:
+                    retained = {"code":"SERVICE_RESTARTED","message":"服务重启，旧任务未自动重放。"}
+                    try:
+                        previous = json.loads(row["error_json"]) if row["error_json"] else None
+                    except (TypeError, ValueError):
+                        previous = None
+                    if type(previous) is dict and type(previous.get("diagnostic_id")) is str and re.fullmatch(r"[0-9a-fA-F]{32}", previous["diagnostic_id"]):
+                        restored = error_from_payload(previous)
+                        if restored.diagnostic_id == previous["diagnostic_id"].lower():
+                            retained = error_payload(restored)
+                    cursor.execute("UPDATE jobs SET status='interrupted',phase='interrupted',finished_at=?,last_activity_at=?,termination_failed=0,error_json=? WHERE job_id=?", (now,now,json.dumps(retained,ensure_ascii=False),row["job_id"]))
+                    self._completion_event(cursor, row["job_id"])
             else:
                 cursor.execute("UPDATE jobs SET status='cancelling',phase='termination_failed',termination_failed=1,cancel_reason='interrupted' WHERE status NOT IN ('succeeded','failed','cancelled','timed_out','interrupted')")
 

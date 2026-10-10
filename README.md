@@ -2,7 +2,7 @@
 
 让 **Codex / Claude Code 调用本机 DeepSeek Harness**，完成代码审查或在独立副本中修改代码。主 AI 负责理解需求、设计方案、复核差异和合入验证，DeepSeek 按明确任务书执行。
 
-当前版本 **0.3.3**，默认使用 Windows 桌面后端，直接复用已安装的 Harness runtime，无须 Linux 或 Docker。MCP 使用本机 stdio；教程中的 `--shared` 让多个客户端会话连接同一个本机后台。一个 Codex 或 Claude Code 聊天可以建立多个独立 DeepSeek 子会话并行工作，多个项目窗口也可以分别建立自己的子会话。每轮任务创建独立 Harness home 和代码副本，不接管已打开的桌面聊天。
+当前版本 **0.3.4**，默认使用 Windows 桌面后端，直接复用已安装的 Harness runtime，无须 Linux 或 Docker。MCP 使用本机 stdio；教程中的 `--shared` 让多个客户端会话连接同一个本机后台。一个 Codex 或 Claude Code 聊天可以建立多个独立 DeepSeek 子会话并行工作，多个项目窗口也可以分别建立自己的子会话。每轮任务创建独立 Harness home 和代码副本，不接管已打开的桌面聊天。
 
 [中文连接教程](docs/MCP-CONNECTION.zh-CN.md) · [下载发布包](https://github.com/wuhaoyu050721/deepseek-harness-mcp/releases) · [版本说明](docs/RELEASE-NOTES.md) · [验证范围](docs/VALIDATION.md)
 
@@ -39,15 +39,19 @@ codex mcp add deepseek_harness -- 'D:/Tools/deepseek-harness-mcp/.venv/Scripts/p
 codex mcp list
 ```
 
-也可把生成的 `examples/codex.local.toml` 合并到个人 Codex 配置，确认参数含 `--shared`，`cwd` 指向安装目录，设置 `startup_timeout_sec = 30` 和 `env_vars=["CODEX_APP_TOOLS_PIPE_PATH"]`。此白名单透传宿主动态句柄，不要硬编码 pipe 路径。初始化不会改写已经存在的本机片段；从旧版本升级需要检查这些字段。保存后重新连接 MCP 或重启客户端：共享模式原有七工具，启用自动续跑后再增加三个完成事件工具。工具可见不代表当前客户端提供了自动唤醒能力，须核对回执中的 `auto_continue`。详细配置、Claude Code 接入、项目授权与故障处理见 [完整连接教程](docs/MCP-CONNECTION.zh-CN.md)。
+也可把生成的 `examples/codex.local.toml` 合并到个人 Codex 配置，确认参数含 `--shared`，`cwd` 指向安装目录，设置 `startup_timeout_sec = 30` 和 `env_vars=["CODEX_APP_TOOLS_PIPE_PATH"]`。此白名单透传宿主动态句柄，不要硬编码 pipe 路径。初始化不会改写已经存在的本机片段；从旧版本升级需要检查这些字段。保存后重新连接 MCP 或重启客户端：共享模式包含九个基础工具，启用自动续跑后共十二个；直接模式分别为六个或九个。工具可见不代表当前客户端提供了自动唤醒能力，须核对回执中的 `auto_continue`。详细配置、Claude Code 接入、项目授权与故障处理见 [完整连接教程](docs/MCP-CONNECTION.zh-CN.md)。
 
 ## MCP 工具
+
+0.3.4 可先用 `harness_preflight` 检查待提交范围，正常 PHP 空值、变量和动态认证头保持原始源码字节。`harness_service_info` 显示配置版本、重连需求和活动数量；修改配置后完成原任务、关闭旧连接再重连。结果按需使用 `view="summary"`、`"patch"`、`"files"` 或兼容的 `"full"`，切换视图从无游标开始。执行 succeeded 与引用 valid/invalid/unknown、补丁 available_for_review 分别展示；后者仍需主 AI 核对当前基线并验证。
 
 | 工具 | 用途 |
 | --- | --- |
 | `harness_submit` | 提交任务：`project_id`、`prompt`、`client_request_id`；可选范围、时限和 `mode` |
 | `harness_status` | 查询状态、阶段、耗时和安全错误 |
 | `harness_result` | 读取报告与修改内容，支持游标分页 |
+| `harness_preflight` | 提交前检查授权源码；命中凭证时返回脱敏规则、相对路径和行号，成功返回检查计数，不调用模型 |
+| `harness_service_info` | 查询配置版本、重连需求、活动连接和任务数量 |
 | `harness_cancel` | 请求取消，随后查询是否确认停止 |
 | `harness_session_open` | 共享模式：登记固定项目、模式和范围的独立子会话，返回 `session_id` |
 | `harness_session_send` | 共享模式：向已有子会话提交下一轮任务，返回 `job_id` |
@@ -60,7 +64,7 @@ codex mcp list
 
 Codex 通知目标来自宿主 thread/turn 元数据和本机正规 app-tools 通道；只读预检确认能力和原对话归属后绑定。任务提示不能指定聊天、网址或命令。通知仅含固定作业与事件标识，模型报告仍通过 `harness_result` 读取。事件 `delivered` 要结合 `delivery_status` 判断：Codex 的 `accepted` 表示宿主接受，Claude 的 `channel_written` 仅表示前端写出了消息。处理完结果后才调用 `harness_completion_ack`。若写后连接中断、结果不明，事件记为 `uncertain`，不会盲目再次发送。失败、取消或超时不能自动重跑模型或合入部分修改。
 
-普通 Claude 连接支持审查、编辑与子代理工具，工具数量取决于 completion 开关（共享模式七或十个），完成机制缺少上下文时回执为 false。Claude 实验推送需服务启动参数 `--claude-channel`、客户端 legacy 协议以及交互启动 `--dangerously-load-development-channels server:deepseek_harness`；详细步骤见 [Claude channel 接入](docs/MCP-CONNECTION.zh-CN.md)。每个 stdio 前端使用私有连接标识区分窗口，进程重启会产生新身份，已有绑定不能用 watch 改投新会话；保留原 job_id 仍可读取结果继续处理。
+普通 Claude 连接支持审查、编辑与子代理工具，工具数量取决于 completion 开关（共享模式九或十二个），完成机制缺少上下文时回执为 false。Claude 实验推送需服务启动参数 `--claude-channel`、客户端 legacy 协议以及交互启动 `--dangerously-load-development-channels server:deepseek_harness`；详细步骤见 [Claude channel 接入](docs/MCP-CONNECTION.zh-CN.md)。每个 stdio 前端使用私有连接标识区分窗口，进程重启会产生新身份，已有绑定不能用 watch 改投新会话；保留原 job_id 仍可读取结果继续处理。
 
 `--shared` 保持一个后台持有数据目录的实例锁。最后一个前端断开后，有等待或运行任务时后台继续工作；无连接且无任务时，默认等待 30 秒后安全退出。不带 `--shared` 的直接模式仍只允许一个服务使用同一数据目录。升级、修改授权或切换到共享模式时，请先完成或取消任务、关闭旧连接，再重新连接；不要删除锁或数据库，也不要更换数据目录绕过未确认停止的执行。
 

@@ -67,7 +67,7 @@ def test_failed_host_preflight_retains_submit_without_false_auto_promise(tmp_pat
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("sessions,enabled,expected", [(False, False, 4), (True, False, 7), (False, True, 7), (True, True, 10)])
+@pytest.mark.parametrize("sessions,enabled,expected", [(False, False, 6), (True, False, 9), (False, True, 9), (True, True, 12)])
 def test_auto_tools_are_exposed_only_when_config_enabled_and_context_never_in_schema(tmp_path, sessions, enabled, expected):
     async def scenario():
         server = create_server(app_config(tmp_path, enabled), manager=proxy(), sessions=sessions)

@@ -319,7 +319,7 @@ def test_list_validates_limit_and_redacts_registered_secret_titles(session_confi
         assert_code(error.value, "INVALID_PAGE_SIZE")
 
 
-def test_shared_schema_keeps_four_tools_and_binds_session_parameters():
+def test_shared_schema_keeps_base_and_session_tools_and_binds_session_parameters():
     async def check():
         proxy = MagicMock(secrets=[])
         proxy.session_open = AsyncMock(return_value={"session_id": "fixture-session"})
@@ -327,7 +327,7 @@ def test_shared_schema_keeps_four_tools_and_binds_session_parameters():
         proxy.session_list = AsyncMock(return_value={"sessions": []})
         server = create_server(AppConfig(Path("unused-by-proxy")), manager=proxy, sessions=True)
         schemas = {tool.name: tool.input_schema for tool in await server.list_tools()}
-        assert set(schemas) == {"harness_submit", "harness_status", "harness_result", "harness_cancel", "harness_session_open", "harness_session_send", "harness_session_list"}
+        assert set(schemas) == {"harness_submit", "harness_status", "harness_result", "harness_cancel", "harness_service_info", "harness_preflight", "harness_session_open", "harness_session_send", "harness_session_list"}
         assert set(schemas["harness_session_open"]["required"]) == {"project_id", "client_request_id"}
         assert schemas["harness_session_open"]["properties"]["mode"]["default"] == "review"
         assert set(schemas["harness_session_send"]["properties"]) == {"session_id", "prompt", "client_request_id", "timeout_seconds"}

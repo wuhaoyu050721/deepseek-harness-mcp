@@ -21,9 +21,9 @@ from typing import Callable
 import uuid
 
 from .config import AppConfig, resolve_credential
-from .errors import HarnessError
+from .errors import HarnessError, error_from_payload, error_payload
 from .process_control import OwnedProcess, named_job_stopped, spawn_owned, stop_process_tree
-from .redaction import redact_text
+from .redaction import redact_text, redact_value
 
 
 MAX_RECORD_BYTES = 16 * 1024
@@ -345,7 +345,10 @@ class DesktopRunner:
             raw = raw.encode("utf-8")[:limit].decode("utf-8", errors="ignore")
             error = {"code": "OUTPUT_LIMIT", "message": "模型回复超过配置的报告大小上限。"}
         elif error is not None:
-            error = {"code": error["code"], "message": redact_text(error["message"], (secret,), 4096)}
+            restored = error_from_payload(error)
+            if restored.code == "PROTOCOL_ERROR" and error["code"] != "PROTOCOL_ERROR":
+                raise HarnessError("EXECUTOR_PROTOCOL_ERROR", "桌面 Worker 未返回有效的有界结果。")
+            error = redact_value(error_payload(restored, stage="model_execute"), (secret,))
         elif returncode != 0:
             error = {"code": "WORKER_FAILED", "message": "桌面 Worker 未正常退出。"}
         timing = {}
@@ -397,14 +400,18 @@ class DesktopRunner:
                 await asyncio.shield(self.terminate(state.job_id))
             raise
         except HarnessError as error:
-            code = error.code
+            payload = error_payload(error, stage="model_execute")
+            code = payload["code"]
             if code == "SNAPSHOT_OUTPUT_LIMIT":
                 code = "OUTPUT_LIMIT"
             elif code == "PREPARATION_PROCESS_UNAVAILABLE":
                 code = "EXECUTOR_UNAVAILABLE"
-            result["error"] = {"code": code, "message": redact_text(error.message, (secret,), 4096)}
-        except Exception:
-            result["error"] = {"code": "WORKER_FAILED", "message": "桌面执行未正常完成；原始诊断未进入报告。"}
+            payload["code"] = code
+            result["error"] = redact_value(payload, (secret,))
+        except Exception as error:
+            payload = error_payload(error, stage="model_execute")
+            payload.update(code="WORKER_FAILED", message="桌面执行未正常完成；原始诊断未进入报告。")
+            result["error"] = redact_value(payload, (secret,))
         finally:
             stopped = True if state is None else await self.terminate(state.job_id)
             result["execution_stopped"] = stopped

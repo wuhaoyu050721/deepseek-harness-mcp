@@ -19,7 +19,7 @@ import threading
 import time
 
 from .redaction import redact_value
-from .errors import HarnessError
+from .errors import HarnessError, error_from_payload, error_payload
 
 
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -128,10 +128,12 @@ def execute(request: dict) -> dict:
             return run_harness(request, snapshot, home, on_activity)
     except HarnessError as error:
         return {"raw_text": "", "finish_reason": None, "usage": None,
-                "error": {"code": error.code, "message": error.message}}
-    except BaseException:
+                "error": error_payload(error, stage="model_execute")}
+    except BaseException as error:
+        diagnostic = error_payload(error, stage="model_execute")
+        diagnostic.update(code="WORKER_FAILED", message="桌面 Worker 未正常完成；原始诊断未进入报告。")
         return {"raw_text": "", "finish_reason": None, "usage": None,
-                "error": {"code": "WORKER_FAILED", "message": "桌面 Worker 未正常完成；原始诊断未进入报告。"}}
+                "error": diagnostic}
     finally:
         activity_stop.set()
         if activity_thread:
@@ -151,9 +153,12 @@ def encode_result(result: dict, request: dict) -> bytes:
     error = result.get("error")
     if error is not None:
         if not isinstance(error, dict) or not isinstance(error.get("code"), str) or not isinstance(error.get("message"), str):
-            error = {"code": "EXECUTOR_PROTOCOL_ERROR", "message": "桌面 Worker 错误格式不正确。"}
+            restored = HarnessError("EXECUTOR_PROTOCOL_ERROR", "桌面 Worker 错误格式不正确。")
         else:
-            error = {"code": error["code"], "message": error["message"]}
+            restored = error_from_payload(error)
+            if restored.code == "PROTOCOL_ERROR" and error["code"] != "PROTOCOL_ERROR":
+                restored = HarnessError("EXECUTOR_PROTOCOL_ERROR", "桌面 Worker 错误格式不正确。")
+        error = error_payload(restored, stage="model_execute")
     # 固定白名单避免异常/SDK 扩展字段、字典键、未经核实的 usage 进入输出。
     timing = {}
     for name in ("initialization_seconds", "elapsed_seconds"):
@@ -186,8 +191,10 @@ def main() -> None:
             request = {}
             raise ValueError()
         result = execute(request)
-    except BaseException:
-        pass
+    except BaseException as error:
+        diagnostic = error_payload(error, stage="worker_response")
+        diagnostic.update(code="EXECUTOR_PROTOCOL_ERROR", message="桌面 Worker 任务输入不正确。")
+        result["error"] = diagnostic
     try:
         sys.stdout.buffer.write(encode_result(result, request) + b"\n")
         sys.stdout.buffer.flush()

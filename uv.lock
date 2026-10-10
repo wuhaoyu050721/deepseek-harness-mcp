@@ -201,7 +201,7 @@ wheels = [
 
 [[package]]
 name = "deepseek-harness-mcp"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "." }
 dependencies = [
     { name = "deepseek-harness-sdk" },

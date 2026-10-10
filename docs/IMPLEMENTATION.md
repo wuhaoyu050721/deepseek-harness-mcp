@@ -1,6 +1,6 @@
 # 实现与权限边界
 
-本文描述 0.3.3 的服务结构，包括可选 `--shared` 连接、可信默认编辑模式、Codex 桌面完成通知和 Claude Code 实验 channel。Codex 原对话空闲唤醒、实际自动读取及完成工具入口，Claude 通道传输与隔离已验收；Claude 应用内续跑仍未验证。安装与使用见 [连接教程](MCP-CONNECTION.zh-CN.md)，具体范围见 [验证记录](VALIDATION.md)；历史协议、多会话和模型执行记录不代替自动续跑验收。
+本文描述 0.3.4 的服务结构，包括可选 `--shared` 连接、可信默认编辑模式、Codex 桌面完成通知和 Claude Code 实验 channel。Codex 原对话空闲唤醒、实际自动读取及完成工具入口，Claude 通道传输与隔离已验收；Claude 应用内续跑仍未验证。安装与使用见 [连接教程](MCP-CONNECTION.zh-CN.md)，具体范围见 [验证记录](VALIDATION.md)；历史协议、多会话和模型执行记录不代替自动续跑验收。
 
 ## 数据流
 
@@ -56,7 +56,7 @@ Windows 后台通过 WMI/CIM 创建隐藏的独立进程，避免继承单个 st
 
 确定未写出的临时错误可退避重试；写后断连或投递租约失效时进入 uncertain，不盲目再次发送可能已受理的消息。原对话通过事件列表读取结果并确认即可恢复。关闭前端不等于取消模型，通知绑定及事件持久化供恢复使用。失败、取消、超时、中断仍只提示读取状态与错误，不自动重新提交或应用部分修改。
 
-启用功能时增加 `harness_watch`、`harness_completion_list`、`harness_completion_ack`，共享模式合计十工具；关闭时仍七工具。普通 Claude 仍支持所有已开启的审查、编辑和子代理工具，没有推送上下文则返回 auto_continue=false。Codex 通知需要已通过预检的宿主，Claude 推送另须显式服务参数和客户端渠道登记；工具发现不证明自动唤醒。通知桥、真实模型完成与主对话续跑需分别验收。
+启用功能时增加 `harness_watch`、`harness_completion_list`、`harness_completion_ack`，共享模式合计十二工具；关闭时九个基础工具（含预检及服务信息）。普通 Claude 仍支持所有已开启的审查、编辑和子代理工具，没有推送上下文则返回 auto_continue=false。Codex 通知需要已通过预检的宿主，Claude 推送另须显式服务参数和客户端渠道登记；工具发现不证明自动唤醒。通知桥、真实模型完成与主对话续跑需分别验收。
 
 Claude 适配只在显式 `--claude-channel` 时声明实验 claude/channel capability，并按官方 notifications/claude/channel 格式发送固定事件。客户端需使用 legacy 握手协议并在交互启动时允许该开发渠道。服务没有渠道许可反馈，机制绑定 true 不代表 Claude 已登记或接收；channel_written 与 ack 分开。每个 stdio 前端独有的 connection/session 标识确保路由窗口隔离，session 标识不是 Claude 的真实会话编号。重启身份变化后旧 job_id 仍可读取，但不能用 watch 伪装原身份；/clear 或交互 resume 可能保留 MCP 进程，当前不宣称识别所有对话切换或安全跨重启恢复。配置与官方参考见连接教程。
 

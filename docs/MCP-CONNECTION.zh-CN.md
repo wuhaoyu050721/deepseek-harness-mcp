@@ -1,6 +1,10 @@
 # Windows 上连接 DeepSeek Harness MCP
 
-本教程针对 0.3.3 的 Windows `desktop` 路线、`--shared` 多会话连接、Codex 桌面通知和可选 Claude 实验 channel。Codex 或 Claude Code 可以审查代码或修改授权副本，再由主 AI 复核、合入和验证。新 desktop 配置默认允许副本编辑；旧配置未设置新字段时保留审查默认。多会话至少需要 0.3.2；通知桥和可信默认模式需要 0.3.3。Codex 空闲唤醒、自动读取及实际完成工具入口，Claude 通道传输已验收；Claude 应用内续跑仍未验证。具体范围见 [验证记录](VALIDATION.md)，发布状态以 Releases 为准。
+本教程针对 0.3.4 的 Windows `desktop` 路线、`--shared` 多会话连接、Codex 桌面通知和可选 Claude 实验 channel。Codex 或 Claude Code 可以审查代码或修改授权副本，再由主 AI 复核、合入和验证。新 desktop 配置默认允许副本编辑；旧配置未设置新字段时保留审查默认。多会话至少需要 0.3.2；通知桥和可信默认模式需要 0.3.3。Codex 空闲唤醒、自动读取及实际完成工具入口，Claude 通道传输已验收；Claude 应用内续跑仍未验证。具体范围见 [验证记录](VALIDATION.md)，发布状态以 Releases 为准。
+
+0.3.4 使用 `harness_service_info` 查询当前/磁盘配置版本、重连需求和活动连接/任务数量。`config_state=changed`、`restart_required=true` 表示当前连接仍用旧权限；先完成或取消原任务，关闭所有旧连接，待后台空闲退出后重连。磁盘配置损坏时状态为 invalid，重启需求为未知，先修复配置；不自动重载或取消任务。doctor 可只读连接已存在后台检查版本；旧后台不支持新接口时计数为未知。
+
+提交任务前可调用 `harness_preflight(project_id, relative_paths, mode)`，不调用模型或改项目，命中仅返回脱敏规则、相对路径和行号。正式任务仍重新检查源码。结果用 `harness_result(view="summary")` 先看摘要、问题及 `quality`，再按需取 patch 或 files；同一视图沿 next_cursor 完整取回，切换视图清空游标。full 兼容旧调用。执行完成与引用有效计数分开，available_for_review 只表示机械补丁供复核，尚未检查当前源文件。未绑定通知时遵守回执的2/5/10/20秒自适应间隔；有原对话完成通知时继续独立工作并等待通知。
 
 这个 MCP 通过本机 **stdio** 连接，由每个客户端会话启动自己的 Python 前端。教程中的 `--shared` 使这些前端复用一个本机后台，共享任务队列、请求编号和历史。客户端仍配置程序路径和参数，无须填写 HTTP 网址。前端与后台使用经过双向认证的本机回环连接。服务使用已安装的 DeepSeek Harness 桌面运行时；模型、接口地址和凭证引用由本项目的本机 TOML 配置指定，不会自动继承桌面聊天窗口当前选择的模型。
 
@@ -132,7 +136,7 @@ tool_timeout_sec = 30
 
 保存后，在 Codex 中重新连接 MCP 服务；若当前窗口仍显示旧工具参数，重启 Codex 或开启加载了新连接的聊天。共享后台首次启动需要创建私有登记目录和独立进程，`startup_timeout_sec = 30` 为这一阶段预留时间。`tool_timeout_sec` 是单次工具调用的等待时间；后台模型任务的总时限由 `timeout_seconds` 和服务配置决定，两者不同。
 
-共享模式原有七个工具：`harness_submit`、`harness_status`、`harness_result`、`harness_cancel`，以及 `harness_session_open`、`harness_session_send`、`harness_session_list`。启用 `completion.auto_continue` 后再增加 `harness_watch`、`harness_completion_list`、`harness_completion_ack`，共十个。客户端可能显示命名空间前缀。工具可见不代表宿主唤醒可用，任务回执 `auto_continue=true` 仅表示完成机制已绑定。Codex 先对宿主能力和原对话做只读预检，失败时返回 false 与 `auto_continue_reason`，普通模型任务仍正常接纳。核对 `harness_submit` 与 `harness_session_open` 的真实 `mode` 默认值；`review/edit` 两种模式保持兼容。
+共享模式包含九个基础工具：`harness_submit`、`harness_status`、`harness_result`、`harness_cancel`，以及 `harness_session_open`、`harness_session_send`、`harness_session_list`、`harness_preflight`、`harness_service_info`。启用 `completion.auto_continue` 后再增加 `harness_watch`、`harness_completion_list`、`harness_completion_ack`，共十二个。客户端可能显示命名空间前缀。工具可见不代表宿主唤醒可用，任务回执 `auto_continue=true` 仅表示完成机制已绑定。Codex 先对宿主能力和原对话做只读预检，失败时返回 false 与 `auto_continue_reason`，普通模型任务仍正常接纳。核对 `harness_submit` 与 `harness_session_open` 的真实 `mode` 默认值；`review/edit` 两种模式保持兼容。
 
 ## 4. 连接 Claude Code（可选）
 
@@ -148,7 +152,7 @@ claude mcp list
 
 需要重启或重新连接 Claude Code，并完成客户端本身要求的 MCP 授权。命令格式可用 `claude mcp add-json --help` 核对；安装包内的 [通用 Claude 配置](../examples/claude.mcp.example.json) 也可用于手工合并。该文件外层是 `mcpServers`，CLI `add-json` 接受的是其中单个服务对象，不能把整个外层文档直接传给它。连接和作用域说明参见 [Claude Code 官方 MCP 文档](https://code.claude.com/docs/en/mcp)。
 
-普通 Claude 连接可使用全部已启用的审查、编辑与子代理功能；共享模式为七工具，completion 开启时为十工具。未显式启用 channel 时，不具备 Claude 推送上下文，回执通常为 `auto_continue=false`，继续按原 job_id 查询即可。
+普通 Claude 连接可使用全部已启用的审查、编辑与子代理功能；共享模式为九个基础工具，completion 开启时为十二个工具。未显式启用 channel 时，不具备 Claude 推送上下文，回执通常为 `auto_continue=false`，继续按原 job_id 查询即可。
 
 ### Claude Code 实验 channel（可选）
 
@@ -372,4 +376,4 @@ Windows `desktop` 路线使用独立副本和受监管进程，但没有操作�
 
 ## 命令核对范围
 
-本教程的服务参数和工具契约面向 0.3.3；通知与宿主工具入口的分项验收见 [验证记录](VALIDATION.md)，Claude 应用内续跑仍未验证。既有 CLI 注册格式在 0.3.1 编写时以 `codex mcp add --help`、`codex mcp list --help`、`claude mcp add-json --help` 和 `claude mcp list --help` 核对，使用的客户端版本为 Codex CLI `0.162.0-alpha.17.2`、Claude Code `2.1.273`；历史工具发现、多会话和模型成功不代替自动续跑验收。客户端升级后如提示参数变化，以该机 `--help` 和官方文档为准。安装依赖、doctor、工具发现、多会话生命周期、真实模型调用、通知送达和主 AI 处理确认应分别验证。
+本教程的服务参数和工具契约面向 0.3.4；通知与宿主工具入口的分项验收见 [验证记录](VALIDATION.md)，Claude 应用内续跑仍未验证。既有 CLI 注册格式在 0.3.1 编写时以 `codex mcp add --help`、`codex mcp list --help`、`claude mcp add-json --help` 和 `claude mcp list --help` 核对，使用的客户端版本为 Codex CLI `0.162.0-alpha.17.2`、Claude Code `2.1.273`；历史工具发现、多会话和模型成功不代替自动续跑验收。客户端升级后如提示参数变化，以该机 `--help` 和官方文档为准。安装依赖、doctor、工具发现、多会话生命周期、真实模型调用、通知送达和主 AI 处理确认应分别验证。

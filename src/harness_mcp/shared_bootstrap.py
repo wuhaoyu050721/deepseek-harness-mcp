@@ -362,7 +362,10 @@ async def connect_or_start(config, config_path):
                     code = failure.get("code")
                     if code not in {"SHARED_STORAGE_UNSAFE", "SHARED_CONFIG_MISMATCH", "INSTANCE_LOCKED", "INVALID_CONFIG", "SHARED_PROTOCOL_ERROR", "SHARED_PRIVATE_PATH_UNSAFE", "SHARED_RUNTIME_UNSAFE", "DESKTOP_OS_UNSUPPORTED", "DESKTOP_RUNTIME_UNAVAILABLE", "SDK_VERSION_UNSUPPORTED", "DESKTOP_NOT_FOUND", "DOCKER_NOT_FOUND", "DOCKER_UNAVAILABLE", "EXECUTION_BLOCKED", "SERVICE_STOPPING", "INTERNAL_ERROR"}:
                         code = "SHARED_BACKEND_UNAVAILABLE"
-                    raise HarnessError(code, "共享后台启动失败，请查看本机环境诊断。")
+                    from .errors import error_from_payload
+                    raise error_from_payload({key: value for key, value in
+                        {**failure, "code": code, "message": "共享后台启动失败，请查看本机环境诊断。"}.items()
+                        if key in {"code", "message", "stage", "diagnostic_id", "exception_type", "details"}})
             connected = await existing()
             if connected is not None:
                 if connected[2]["token"] != bootstrap["token"]:
