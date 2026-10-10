@@ -22,6 +22,7 @@ heartbeat_seconds = 2
 termination_grace_seconds = 3
 
 [limits]
+max_parallel_jobs = 3
 max_queue = 5
 default_timeout_seconds = 600
 max_timeout_seconds = 1800

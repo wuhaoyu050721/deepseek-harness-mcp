@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import asynccontextmanager
+import inspect
 from pathlib import Path
 import sys
 from typing import Any, Literal
@@ -10,6 +11,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict
 
+from . import __version__
 from .config import AppConfig, load_config
 from .errors import error_payload
 from .redaction import redact_value
@@ -22,8 +24,10 @@ class ToolReply(BaseModel):
     error: dict[str, Any] | None = None
 
 
-def create_server(config: AppConfig, runner=None) -> MCPServer:
-    manager = TaskManager(config, runner)
+def create_server(config: AppConfig, runner=None, *, manager=None, sessions: bool = False) -> MCPServer:
+    # 直接模式持有任务管理器；共享模式注入只连接后台的会话代理。
+    if manager is None:
+        manager = TaskManager(config, runner)
 
     @asynccontextmanager
     async def lifespan(_server):
@@ -34,7 +38,7 @@ def create_server(config: AppConfig, runner=None) -> MCPServer:
             await manager.close()
 
     server = MCPServer(
-        "deepseek-harness-mcp", version="0.3.1", lifespan=lifespan,
+        "deepseek-harness-mcp", version=__version__, lifespan=lifespan,
         instructions="提交经本机授权的代码审查或副本修改任务。mode 默认 review；edit 只修改独立副本，result 返回实际差异，由主 AI 复核并合入原项目。submit 后按建议间隔查询；取消只能通过 harness_cancel；单次查询停止不取消后台任务。",
         log_level="WARNING",
     )
@@ -53,18 +57,20 @@ def create_server(config: AppConfig, runner=None) -> MCPServer:
             return reply(error=error)
 
     @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    def harness_status(job_id: str) -> ToolReply:
+    async def harness_status(job_id: str) -> ToolReply:
         """返回任务状态、阶段、真实耗时、最近活动和脱敏错误，不提供估算百分比。"""
         try:
-            return reply(manager.status(job_id))
+            value = manager.status(job_id)
+            return reply(await value if inspect.isawaitable(value) else value)
         except Exception as error:
             return reply(error=error)
 
     @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    def harness_result(job_id: str, cursor: str | None = None, page_size: int = 20) -> ToolReply:
+    async def harness_result(job_id: str, cursor: str | None = None, page_size: int = 20) -> ToolReply:
         """读取摘要、问题、报告文本及 edit 实际差异/后内容片段；沿 next_cursor 取完整修改，尚未保存时 ready=false。"""
         try:
-            return reply(manager.result(job_id,cursor,page_size))
+            value = manager.result(job_id,cursor,page_size)
+            return reply(await value if inspect.isawaitable(value) else value)
         except Exception as error:
             return reply(error=error)
 
@@ -76,6 +82,32 @@ def create_server(config: AppConfig, runner=None) -> MCPServer:
         except Exception as error:
             return reply(error=error)
 
+    if sessions:
+        @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+        async def harness_session_open(project_id: str, client_request_id: str, title: str = "", mode: Literal["review", "edit"] = "review", relative_paths: list[str] | None = None) -> ToolReply:
+            """创建绑定项目与范围的独立 DeepSeek 子代理对话；一个 Codex 对话可打开多个会话，不调用模型。"""
+            try:
+                return reply(await manager.session_open(project_id, client_request_id, title, mode, relative_paths))
+            except Exception as error:
+                return reply(error=error)
+
+        @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+        async def harness_session_send(session_id: str, prompt: str, client_request_id: str, timeout_seconds: int | None = None) -> ToolReply:
+            """给子代理发任务或追问，返回 job_id；继承本会话有界历史。同会话须等上一轮结束，不同会话可并行。"""
+            try:
+                return reply(await manager.session_send(session_id, prompt, client_request_id, timeout_seconds))
+            except Exception as error:
+                return reply(error=error)
+
+        @server.tool(structured_output=True, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+        async def harness_session_list(project_id: str | None = None, limit: int = 20) -> ToolReply:
+            """找回独立子代理会话及近期作业编号；按项目筛选，随后用任务工具查状态、结果或取消。"""
+            try:
+                value = manager.session_list(project_id, limit)
+                return reply(await value if inspect.isawaitable(value) else value)
+            except Exception as error:
+                return reply(error=error)
+
     return server
 
 
@@ -85,10 +117,16 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8",errors="replace")
     parser = argparse.ArgumentParser(description="DeepSeek Harness MCP 本地 stdio 服务")
     parser.add_argument("--config", type=Path, required=True, help="本机可信 TOML 配置，不包含明文密钥")
+    parser.add_argument("--shared", action="store_true", help="多个 stdio 会话连接同一个本机任务后台")
     args = parser.parse_args()
     try:
-        config = load_config(args.config.resolve())
-        create_server(config).run()
+        config_path = args.config.resolve()
+        config = load_config(config_path)
+        if args.shared:
+            from .shared_client import SharedClient
+            create_server(config, manager=SharedClient(config, config_path=config_path), sessions=True).run()
+        else:
+            create_server(config).run()
     except Exception as error:
         payload = error_payload(error)
         print(f"{payload['code']}: {payload['message']}",file=sys.stderr)

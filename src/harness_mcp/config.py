@@ -25,6 +25,7 @@ class ProjectConfig:
 @dataclass(frozen=True)
 class LimitsConfig:
     max_queue: int = 5
+    max_parallel_jobs: int = 3
     default_timeout_seconds: int = 600
     max_timeout_seconds: int = 1800
     max_file_bytes: int = 2 * 1024 * 1024
@@ -114,6 +115,7 @@ def load_config(path: Path) -> AppConfig:
     _bounded_int(limits.max_output_bytes, 1, 16*1024*1024, "max_output_bytes")
     _bounded_int(limits.max_prompt_chars, 1, 1024*1024, "max_prompt_chars")
     _bounded_int(limits.max_queue, 1, 5, "max_queue")
+    _bounded_int(limits.max_parallel_jobs, 1, 8, "max_parallel_jobs")
     _bounded_int(limits.max_timeout_seconds, 1, 86400, "max_timeout_seconds")
     _bounded_int(limits.default_timeout_seconds, 1, limits.max_timeout_seconds, "default_timeout_seconds")
     model_values = data.get("model", {})

@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from harness_mcp.config import AppConfig, ExecutorConfig, ModelConfig
 from harness_mcp.desktop_launcher import DesktopLaunchError
@@ -550,6 +550,79 @@ class DesktopRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["execution_stopped"])
         self.assertFalse(self.runner._active)
         self.assertFalse(list(self.job.glob("desktop_runs/*/home")))
+
+
+class DesktopScopedRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="scoped desktop recovery ")
+        self.root = Path(self.temporary.name).resolve()
+        self.config = AppConfig(self.root)
+        self.runner = DesktopRunner(self.config, "a" * 32)
+        self.job_id, self.other_job_id = "b" * 32, "c" * 32
+        self.own_record = self.record(self.job_id, "d" * 32)
+        self.other_record = self.record(self.other_job_id, "e" * 32)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def record(self, job_id, run_id):
+        record = self.root / "jobs" / job_id / "desktop_runs" / run_id / "execution.json"
+        record.parent.mkdir(parents=True)
+        (record.parent / "home").mkdir()
+        (record.parent / "home" / "session.txt").write_text("own artificial session", encoding="utf-8")
+        _write_record(record, {"version": 1, "backend": "desktop", "owner_id": "a" * 32, "job_id": job_id, "run_id": run_id,
+                              "job_name": f"Local\\deepseek-harness-{'a' * 32}-{run_id}", "confirmed_stopped": True})
+        return record
+
+    async def test_own_home_failure_blocks_then_retry_cleans_without_touching_other_active_job(self):
+        original_other = self.other_record.read_bytes()
+        active_other = object()
+        self.runner._active[self.other_job_id] = active_other
+        own_name = f"Local\\deepseek-harness-{'a' * 32}-{'d' * 32}"
+        with patch.object(self.runner, "terminate", AsyncMock(return_value=True)) as terminate, patch("harness_mcp.desktop_runner.named_job_stopped", AsyncMock(return_value=True)) as stopped:
+            with patch.object(self.runner, "_clean_home", return_value=False) as clean:
+                self.assertFalse(await self.runner.recover_job(self.job_id))
+                clean.assert_called_once_with(self.own_record.parent / "home", self.job_id, "d" * 32)
+            self.assertTrue(self.own_record.is_file())
+            self.assertTrue(await self.runner.recover_job(self.job_id))
+            self.assertFalse(self.own_record.is_file())
+            self.assertTrue((self.own_record.parent / "stopped" / "execution.json").is_file())
+            self.assertFalse((self.own_record.parent / "home").exists())
+            self.assertEqual([call.args for call in terminate.call_args_list], [(self.job_id,), (self.job_id,)])
+            self.assertEqual([call.args for call in stopped.call_args_list], [(own_name,), (own_name,)])
+        self.assertEqual(self.other_record.read_bytes(), original_other)
+        self.assertTrue((self.other_record.parent / "home" / "session.txt").is_file())
+        self.assertIs(self.runner._active[self.other_job_id], active_other)
+
+    async def test_invalid_job_id_does_not_access_process_or_records(self):
+        with patch.object(self.runner, "terminate", AsyncMock()) as terminate, patch("harness_mcp.desktop_runner.named_job_stopped", AsyncMock()) as stopped:
+            for invalid in ("../" + self.job_id, "one", self.job_id.upper(), None):
+                self.assertFalse(await self.runner.recover_job(invalid))
+            terminate.assert_not_called()
+            stopped.assert_not_called()
+
+    async def test_live_named_job_is_never_cleaned_or_archived(self):
+        with patch.object(self.runner, "terminate", AsyncMock(return_value=True)), patch("harness_mcp.desktop_runner.named_job_stopped", AsyncMock(return_value=False)), patch.object(self.runner, "_clean_home") as clean:
+            self.assertFalse(await self.runner.recover_job(self.job_id))
+            clean.assert_not_called()
+        self.assertTrue(self.own_record.is_file())
+        self.assertFalse((self.own_record.parent / "stopped").exists())
+
+    async def test_job_directory_symlink_cannot_read_outside_record(self):
+        real = self.own_record.parent.parent.parent
+        moved = real.with_name("retained-real-job")
+        real.rename(moved)
+        try:
+            real.symlink_to(moved, target_is_directory=True)
+        except OSError:
+            self.skipTest("account cannot create symlink")
+        try:
+            with patch.object(self.runner, "terminate", AsyncMock(return_value=True)), patch("harness_mcp.desktop_runner._read_record") as read, patch("harness_mcp.desktop_runner.named_job_stopped", AsyncMock()) as stopped:
+                self.assertFalse(await self.runner.recover_job(self.job_id))
+                read.assert_not_called()
+                stopped.assert_not_called()
+        finally:
+            real.unlink()  # 仅移除本测试创建的链接；不跟随其目标。
 
 
 class DesktopWorkerContractTests(unittest.TestCase):

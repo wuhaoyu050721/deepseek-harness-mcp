@@ -52,6 +52,39 @@ class ServerContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.structured_content["ok"])
         self.manager.submit.assert_awaited_once_with("fixture", "修复", "edit-one", None, None, "edit")
 
+    async def test_shared_proxy_queries_await_and_preserve_business_errors(self):
+        proxy = MagicMock()
+        proxy.secrets = ["test-sensitive-value"]
+        proxy.status = AsyncMock(return_value={"job_id": "shared-one", "status": "running"})
+        proxy.result = AsyncMock(side_effect=HarnessError("JOB_NOT_FOUND", "test-sensitive-value"))
+        with patch("harness_mcp.server.TaskManager") as local_manager:
+            server = create_server(AppConfig(Path("unused-proxy")), manager=proxy)
+            local_manager.assert_not_called()
+        response = await server.call_tool("harness_status", {"job_id": "shared-one"})
+        self.assertEqual(response.structured_content["status"], "running")
+        proxy.status.assert_awaited_once_with("shared-one")
+        response = await server.call_tool("harness_result", {"job_id": "missing"})
+        self.assertEqual(response.structured_content["error"], {"code": "JOB_NOT_FOUND", "message": "[REDACTED]"})
+        proxy.result.assert_awaited_once_with("missing", None, 20)
+
+    async def test_shared_session_schema_and_followup_dispatch(self):
+        proxy = MagicMock()
+        proxy.secrets = []
+        proxy.session_open = AsyncMock(return_value={"session_id": "agent-one"})
+        proxy.session_send = AsyncMock(return_value={"job_id": "turn-one", "session_id": "agent-one"})
+        proxy.session_list = AsyncMock(return_value={"sessions": []})
+        server = create_server(AppConfig(Path("unused-sessions")), manager=proxy, sessions=True)
+        tools = await server.list_tools()
+        self.assertEqual(len(tools), 7)
+        self.assertTrue({"harness_session_open", "harness_session_send", "harness_session_list"} <= {tool.name for tool in tools})
+        response = await server.call_tool("harness_session_open", {"project_id": "demo", "client_request_id": "open-one"})
+        self.assertEqual(response.structured_content["session_id"], "agent-one")
+        proxy.session_open.assert_awaited_once_with("demo", "open-one", "", "review", None)
+        await server.call_tool("harness_session_send", {"session_id": "agent-one", "prompt": "继续", "client_request_id": "send-one"})
+        proxy.session_send.assert_awaited_once_with("agent-one", "继续", "send-one", None)
+        await server.call_tool("harness_session_list", {"project_id": "demo"})
+        proxy.session_list.assert_awaited_once_with("demo", 20)
+
 
 if __name__ == "__main__":
     unittest.main()

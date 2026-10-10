@@ -43,6 +43,7 @@ def test_config_relative_state_and_absolute_project_with_defaults(tmp_path):
     assert loaded.projects["demo"].path == tmp_path
     assert loaded.projects["demo"].allowed_paths == (".",)
     assert loaded.limits.max_queue == 5
+    assert loaded.limits.max_parallel_jobs == 3
     assert loaded.limits.default_timeout_seconds == 600
     assert loaded.executor.backend == "desktop"
 
@@ -50,6 +51,7 @@ def test_config_relative_state_and_absolute_project_with_defaults(tmp_path):
 @pytest.mark.parametrize("section,field,value", [
     (None, "unsupported", 1), ("limits", "unknown", 1),
     ("limits", "max_queue", 0), ("limits", "max_queue", 6),
+    ("limits", "max_parallel_jobs", 0), ("limits", "max_parallel_jobs", 9), ("limits", "max_parallel_jobs", True),
     ("limits", "max_timeout_seconds", True), ("limits", "default_timeout_seconds", 1801),
     ("limits", "max_output_bytes", "100"), ("limits", "max_file_bytes", 0),
     ("executor", "cpus", False), ("executor", "cpus", 65),

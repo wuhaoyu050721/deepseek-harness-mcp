@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-10T14:26:15.052498+00:00",
+  "service_version": "0.3.2",
+  "status": "passed",
+  "scope": "windows_shared_backend_independent_conversations_real_codex_and_desktop_model_acceptance",
+  "environment": {
+    "platform": "Windows",
+    "python": "3.14.7",
+    "mcp": "2.3.0",
+    "harness_sdk": "0.1.5rc1",
+    "desktop_runtime": "0.2.0-rc.2",
+    "codex": "0.162.0-alpha.17.2"
+  },
+  "regression": {
+    "passed_tests": 566,
+    "passed_subtests": 27,
+    "junit": {
+      "tests": 593,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "model_task_submitted": false
+  },
+  "native": {
+    "two_sdk_connections_same_backend": true,
+    "private_registry_permissions": true,
+    "independent_sessions_cross_client_replay": true,
+    "backend_survives_frontend_job_tree_termination": true,
+    "codex": {
+      "simultaneous_codex_connections": 2,
+      "seven_tools_discovered": true,
+      "different_project_control_contexts": true,
+      "second_codex_survives_first_close": true,
+      "codex_model_turn_sent": false
+    },
+    "real_project_context_isolation": true,
+    "real_followup_history": true,
+    "real_cross_frontend_job_replay": true,
+    "backend_idle_exit_confirmed": true
+  },
+  "real_desktop_model": {
+    "new_model_jobs_in_initial_probe": 3,
+    "projects": 2,
+    "concurrent_jobs": 2,
+    "followup_turns": 1,
+    "all_jobs_succeeded": true,
+    "concurrent_job_intervals_verified": true,
+    "simultaneous_running_observed_in_initial_probe": true,
+    "followup_only_inherits_own_history": true,
+    "dedicated_homes_cleaned": true,
+    "owned_worker_trees_stopped": true,
+    "original_fixture_files_unchanged": true,
+    "replay_probe_created_no_jobs": true,
+    "report_tests": "not_run",
+    "generated_code_applied": false
+  },
+  "verification_probe": {
+    "initial_probe_cleanup_error": "anyio_context_entered_and_closed_in_different_probe_tasks",
+    "probe_corrected": true,
+    "completed_jobs_recovered_by_original_request_ids": true,
+    "model_jobs_not_resubmitted": true,
+    "corrected_probe_exit_code": 0
+  },
+  "additional_local_project": {
+    "read_only_authorization": true,
+    "authorized_snapshot_verified": true,
+    "source_and_head_unchanged": true,
+    "model_task_submitted": false
+  },
+  "source_module_sha256": {
+    "src/harness_mcp/__init__.py": "a0a9150b4c0353d9f03a9d5f2a71673a5b7553288a3ac788544d8eb9c1f04b85",
+    "src/harness_mcp/config.py": "e504efb134bf342ddafacd06fa220228a65fef3309bd7dceac3e9bdd2cd70b94",
+    "src/harness_mcp/conversation.py": "a89955d8cfe3fa8eb66d15b35b74af443ecb83e8c2d4af821892d3afcf7c5b52",
+    "src/harness_mcp/desktop_launcher.py": "9c21c99b5aefaa2c3a12f54039077332c01682979f60d2e6bcfbea3627730df5",
+    "src/harness_mcp/desktop_runner.py": "ba22b94f3e413700030ed4c1be5a06c9e83b68445bdddf195ce11553cdb29e65",
+    "src/harness_mcp/desktop_worker.py": "fbb567fddf448b2a16b69f3906e711926b5758f70fbaaca435c34121d48a4d61",
+    "src/harness_mcp/doctor.py": "1e86e039b563e754671d2e2156da51c4167bcef6248023d8bda65dbb1e064d76",
+    "src/harness_mcp/edit_collect_worker.py": "2eefc731435b23d2fbe94c91fce6f2a23e68f57cb5b4c9e706682473da0dedc0",
+    "src/harness_mcp/edit_workspace.py": "b41ca84c670437abdc0f08d5b71b1b620474341c634a4aa2314906a69c822788",
+    "src/harness_mcp/errors.py": "4af507149cdfffd39a030ac7771d6c1d74d5fc655322281418efd1b52f1f3bca",
+    "src/harness_mcp/harness_adapter.py": "07599a798259f30c859c00d6bd58a8255836296c004d7943ab5c26ba7760f169",
+    "src/harness_mcp/instance_lock.py": "a9d1b0dfa3b2e1196c9775e9a001dbe141020f6dcb0eda83c263b6056f25c575",
+    "src/harness_mcp/job_store.py": "d3bba0458d2ab3c914b0525ab9578b125090a94bdd0058efc54406b487af3a3f",
+    "src/harness_mcp/parallel_manager.py": "455433681f5cabf6a177debf7a06a21cf5adf347557452da031015631cc23ef6",
+    "src/harness_mcp/probe.py": "5787e2390d2f567c839a13188a16378925cd2fcb2ff292f16c7b51d52873851d",
+    "src/harness_mcp/process_control.py": "4cca4bb07cb653a797815ac59896ceff1a1b8a1403d694c7fe9e0f6ca47dc383",
+    "src/harness_mcp/redaction.py": "841d87e15696ba562cd21e2558ecf6ffa5d3303cd61f06cb380074d0d29849ac",
+    "src/harness_mcp/report.py": "d9e5c1d122a7d81998794d3df0827a2e197c99cc302d6db5341ec24a38e9ddb5",
+    "src/harness_mcp/review_prompt.py": "7a5290b8698d5d29ccdf32c0b27aa218c1cca54fe4788151e6899be7c93f5d29",
+    "src/harness_mcp/runner.py": "55884a1efda9e4adfc942c149c3064e9673bef3b0f5beb1d74bf5f4027ba9878",
+    "src/harness_mcp/server.py": "ca5ce3f44302a7cf50438d33dea4765cb3a1b92d0917584c34c73360a9cee5c6",
+    "src/harness_mcp/shared_bootstrap.py": "25ec76ea77b497b95c95e13eae47ab84ad9d56441d0299686e00d204803a7139",
+    "src/harness_mcp/shared_client.py": "ef9b059cf20c1ae7da6f2bb5a470e3f23a23fe54f64b978921093be619b31775",
+    "src/harness_mcp/shared_service.py": "6cfce9d470cd59f3f11d5b5bbf2172153fd5fcdac81a55a739233b75c81f9614",
+    "src/harness_mcp/snapshot_worker.py": "a34aaa261e8020eb599c3dfe2dbf37a5088ca132a60549dcce76031768793e33",
+    "src/harness_mcp/supervisor.py": "dce564ddd96eb8361c86e9581111e8d7eca743119a75fd9aef06d0f92305331f",
+    "src/harness_mcp/task_manager.py": "ea3b2293e3e1528640936cfeb80d32d36b820b56ee1c0777fc34e5a3641805ba",
+    "src/harness_mcp/worker.py": "f2b164d5bc9e87bf751b4fb3e6ce839bd1126753f7d14a5a3a3834c68dbb41d2",
+    "src/harness_mcp/workspace.py": "bb38e1a570de3945d908af17b71e76fa914677b29cb5f6a7cfaae16477ea8f62"
+  },
+  "privacy": {
+    "raw_records_published": false,
+    "task_data_published": false,
+    "personal_configuration_published": false,
+    "credential_store_published": false
+  },
+  "unverified": [
+    "desktop_GUI_hot_reload",
+    "claude_shared_connection_acceptance",
+    "real_active_model_cancellation_and_provider_billing",
+    "linux_macos_and_other_python_versions",
+    "actual_docker_parallel_execution"
+  ],
+  "desktop_os_filesystem_sandbox": false,
+  "desktop_os_network_sandbox": false,
+  "source_zip_installation": {
+    "status": "passed",
+    "scope": "extracted_source_new_venv_no_git_no_model_task",
+    "checks": {
+      "locked_dependency_install": {
+        "exit_code": 0,
+        "status": "passed"
+      },
+      "zip_initialization": {
+        "exit_code": 0,
+        "status": "passed"
+      },
+      "desktop_prerequisites": {
+        "exit_code": 0,
+        "status": "passed"
+      }
+    },
+    "mcp": {
+      "status": "passed",
+      "service_version": "0.3.2",
+      "seven_tools_discovered": true,
+      "edit_schema_verified": true,
+      "model_task_submitted": false
+    },
+    "sample_only_authorized": true,
+    "personal_client_configuration_unchanged": true
+  }
+}

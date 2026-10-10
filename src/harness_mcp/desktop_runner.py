@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 import time
 from typing import Callable
@@ -164,6 +165,56 @@ class DesktopRunner:
             self._recovery_confirmed = False
             return False
         self._recovery_confirmed = confirmed
+        return confirmed
+
+    async def recover_job(self, job_id: str) -> bool:
+        """并发上下文只收敛本作业；不扫描、停止或证明其他作业。"""
+        if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
+            return False
+        if not await self.terminate(job_id):
+            return False
+        directory = self.config.data_dir.resolve() / "jobs" / job_id / "desktop_runs"
+        confirmed = True
+        unconfirmed = 0
+        directories = {}
+        try:
+            for part in (directory.parent.parent, directory.parent, directory):
+                if not os.path.lexists(part):
+                    return confirmed
+                info = part.lstat()
+                if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400 or part.resolve() != part.absolute():
+                    return False
+                directories[part] = (info.st_dev, info.st_ino)
+            for path in directory.glob("*/execution.json"):
+                parent = path.parent.lstat()
+                info = path.lstat()
+                if (not stat.S_ISDIR(parent.st_mode) or getattr(parent, "st_file_attributes", 0) & 0x400
+                    or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(info, "st_file_attributes", 0) & 0x400
+                    or path.parent.resolve() != path.parent.absolute()):
+                    return False
+                value = _read_record(path)
+                after = path.lstat()
+                if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_nlink) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_nlink):
+                    return False
+                for part, identity in directories.items():
+                    observed = part.lstat()
+                    if not stat.S_ISDIR(observed.st_mode) or getattr(observed, "st_file_attributes", 0) & 0x400 or identity != (observed.st_dev, observed.st_ino):
+                        return False
+                if value.get("job_id") != job_id:
+                    return False
+                name = self._check_record(path, value)
+                if not await named_job_stopped(name):
+                    confirmed = False
+                    unconfirmed += 1
+                    if unconfirmed >= 10000:
+                        break
+                elif not self._clean_home(path.parent / "home", job_id, value["run_id"]):
+                    confirmed = False
+                else:
+                    _archive_record(path)
+        except (OSError, ValueError, TypeError):
+            return False
+        # 此返回值仅证明当前 job；不能据此重写全实例 _recovery_confirmed。
         return confirmed
 
     def _clean_home(self, home: Path, job_id: str, run_id: str) -> bool:

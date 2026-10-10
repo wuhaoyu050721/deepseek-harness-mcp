@@ -72,6 +72,7 @@ def test_source_zip_initializes_only_sample_and_absolute_codex_paths(release_roo
     assert server["cwd"] == str(release_root)
     assert Path(server["command"]).is_absolute()
     assert server["args"][-1] == str(release_root / "config" / "codex.local.toml")
+    assert "--shared" in server["args"]
 
 
 def test_repeat_setup_preserves_existing_configs_snippets_and_sample(release_root: Path) -> None:

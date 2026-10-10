@@ -113,6 +113,61 @@ class JobStore:
             cursor.execute("UPDATE jobs SET status='preparing',phase='preparing',started_at=?,last_activity_at=? WHERE job_id=? AND status='queued'", (now, now, row["job_id"]))
             return self._decode(cursor.execute("SELECT * FROM jobs WHERE job_id=?", (row["job_id"],)).fetchone())
 
+    def submit_parallel(self, request: dict, fingerprint: str, execution: dict, max_queue: int, max_parallel_jobs: int) -> tuple[dict, bool]:
+        """在同一事务中保留并发槽；幂等和停止失败门仍适用于整个实例。"""
+        if type(max_parallel_jobs) is not int or max_parallel_jobs < 1:
+            raise ValueError("positive parallel job count required")
+        now = time.time()
+        with self.transaction() as cursor:
+            existing = cursor.execute("SELECT * FROM jobs WHERE client_request_id=?", (request["client_request_id"],)).fetchone()
+            if existing:
+                if existing["fingerprint"] != fingerprint:
+                    raise HarnessError("IDEMPOTENCY_CONFLICT", "同一请求编号已经绑定了不同的任务参数。")
+                return self._decode(existing), False
+            if cursor.execute("SELECT 1 FROM jobs WHERE termination_failed=1 AND status='cancelling'").fetchone():
+                raise HarnessError("EXECUTION_BLOCKED", "旧执行器尚未确认停止，当前不接受新任务。")
+            active = cursor.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('preparing','running','cancelling')").fetchone()[0]
+            waiting = cursor.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0]
+            # 已排队的任务优先获得空闲槽，后提交的任务不能跳过 FIFO。
+            while active < max_parallel_jobs and waiting:
+                oldest = cursor.execute("SELECT job_id FROM jobs WHERE status='queued' ORDER BY created_at,rowid LIMIT 1").fetchone()[0]
+                cursor.execute("UPDATE jobs SET status='preparing',phase='preparing',started_at=?,last_activity_at=? WHERE job_id=?", (now, now, oldest))
+                active += 1
+                waiting -= 1
+            if active >= max_parallel_jobs and waiting >= max_queue:
+                raise HarnessError("QUEUE_FULL", "本实例等待队列已满。")
+            status = "preparing" if active < max_parallel_jobs else "queued"
+            job_id = uuid.uuid4().hex
+            cursor.execute("""INSERT INTO jobs(job_id,client_request_id,fingerprint,request_json,execution_json,
+                status,phase,created_at,started_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (job_id, request["client_request_id"], fingerprint, json.dumps(request,ensure_ascii=False),
+                 json.dumps(execution,ensure_ascii=False), status, status, now, now if status == "preparing" else None, now))
+            return self._decode(cursor.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()), True
+
+    def next_parallel_job(self, active_ids: set[str], max_parallel_jobs: int) -> dict | None:
+        """仅父调度器调用；返回尚未有执行上下文的保留槽或最早排队任务。"""
+        if len(active_ids) >= max_parallel_jobs:
+            return None
+        with self.transaction() as cursor:
+            if cursor.execute("SELECT 1 FROM jobs WHERE termination_failed=1 AND status='cancelling'").fetchone():
+                return None
+            rows = cursor.execute("SELECT * FROM jobs WHERE status IN ('preparing','running','cancelling') ORDER BY created_at,rowid").fetchall()
+            for row in rows:
+                if row["job_id"] not in active_ids:
+                    return self._decode(row)
+            if len(rows) >= max_parallel_jobs:
+                return None
+            row = cursor.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created_at,rowid LIMIT 1").fetchone()
+            if row is None:
+                return None
+            now = time.time()
+            cursor.execute("UPDATE jobs SET status='preparing',phase='preparing',started_at=?,last_activity_at=? WHERE job_id=? AND status='queued'", (now, now, row["job_id"]))
+            return self._decode(cursor.execute("SELECT * FROM jobs WHERE job_id=?", (row["job_id"],)).fetchone())
+
+    def has_unconfirmed_execution(self) -> bool:
+        with self._lock:
+            return bool(self.connection.execute("SELECT 1 FROM jobs WHERE termination_failed=1 AND status='cancelling'").fetchone())
+
     def activity(self, job_id: str, phase: str) -> None:
         phase = phase[:80]
         with self.transaction() as cursor:

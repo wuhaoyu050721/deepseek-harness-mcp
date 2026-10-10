@@ -41,11 +41,25 @@
 ## 生命周期与重试
 
 1. 保存提交参数与 `client_request_id`，收到回执保存 `job_id`。
-2. 查询同一 job；按 `poll_after_seconds` 或更长间隔等待。每实例一个执行位置、最多五个等待位置；大量分拆不增加执行并发。
+2. 查询同一 job；按 `poll_after_seconds` 或更长间隔等待。直接模式保持一个执行位置；共享模式默认三个（可信配置1–8）和最多五个等待位置。同一会话按轮次顺序执行，互不依赖的子代理会话才可并行。
 3. `succeeded/failed/cancelled/timed_out/interrupted` 是终态；`cancelling` 尚未确认停止，`termination_failed=true` 不能当作取消成功。
 4. 响应丢失时，用原 ID、原参数恢复。新 ID 会启动新模型工作，可能重复计费。修改提示、模式、范围或超时而复用原 ID 会出现 `IDEMPOTENCY_CONFLICT`。
 5. 服务重启不会重放旧未完成任务，可能记为 `interrupted`；明确需要重新执行时，使用新的 ID。
 6. 用户要求停止时调用 `harness_cancel`，再查询停止结果。取消本地执行器不能证明上游停止计费。
+
+## 共享连接与子代理会话
+
+0.3.2 的 `--shared` 保留原四个任务工具，并增加以下三工具；只有实时schema确认存在才使用：
+
+- `harness_session_open(project_id, client_request_id, title="", mode="review", relative_paths=None)`：创建固定项目/模式/范围的会话，返回 `session_id`，不调用模型。
+- `harness_session_send(session_id, prompt, client_request_id, timeout_seconds=None)`：初次任务或继续追问，返回 `job_id`，之后复用原状态/结果/取消工具。
+- `harness_session_list(project_id=None, limit=20)`：找回会话和近期任务编号，不自动重放。
+
+一个 Codex 对话可以保存多个 `session_id`；不同项目窗口各自保存自己的会话。后台共享同一幂等数据库、全局并发上限与等待队列，会话对话历史与作业副本独立。`SESSION_BUSY` 表示上一轮未结束；`SESSION_CONFIG_CHANGED` 表示绑定授权发生变化，应创建新会话。请求编号不能跨创建会话/提交任务重复使用。网络回执丢失先用原编号和参数恢复，禁止自动换编号重复执行。
+
+共享后台在无连接但仍有未完成任务时继续运行；无连接且无任务30秒后退出。前端退出不触发取消。旧直接实例占用同一 `data_dir` 时，先结束旧连接后重连；不能删锁、清空历史或换随机目录绕过归属检查。变更可信权限/路由/实现会拒绝静默复用旧后台，等待原任务完成并空闲退出后重连。
+
+会话上下文由本机最近四轮脱敏报告重建，最多16000字符；不保留模型reasoning。每轮从当前授权源码生成新的副本，上一轮未合入的编辑不会自动传给下一轮。主 AI 须按实际差异合入并验证，再提交依赖该修改的任务。
 
 ## 编辑结果与分页
 

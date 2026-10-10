@@ -69,6 +69,7 @@ termination_grace_seconds = 3
 
 [limits]
 max_queue = 5
+max_parallel_jobs = 3
 default_timeout_seconds = 600
 max_timeout_seconds = 1800
 max_file_bytes = 2097152
@@ -94,10 +95,10 @@ allow_untracked = {json.dumps(mcp_extras,ensure_ascii=False)}
         configs[client] = config
     python = root / ".venv" / ("Scripts/python.exe" if sys.platform=="win32" else "bin/python")
     command = json.dumps(str(python),ensure_ascii=False)
-    codex_args = json.dumps(["-m","harness_mcp.server","--config",str(configs["codex"])],ensure_ascii=False)
+    codex_args = json.dumps(["-m","harness_mcp.server","--shared","--config",str(configs["codex"])],ensure_ascii=False)
     cwd = json.dumps(str(root),ensure_ascii=False)
     write_new(root / "examples/codex.local.toml",f"[mcp_servers.deepseek_harness]\ncommand = {command}\nargs = {codex_args}\ncwd = {cwd}\nstartup_timeout_sec = 30\ntool_timeout_sec = 30\n")
-    claude = {"mcpServers":{"deepseek_harness":{"type":"stdio","command":str(python),"args":["-m","harness_mcp.server","--config",str(configs["claude"])]}}}
+    claude = {"mcpServers":{"deepseek_harness":{"type":"stdio","command":str(python),"args":["-m","harness_mcp.server","--shared","--config",str(configs["claude"])]}}}
     write_new(root / "examples/claude.local.json",json.dumps(claude,ensure_ascii=False,indent=2)+"\n")
     print("已准备人工示例仓库、独立 Codex/Claude 数据目录配置和客户端配置片段；没有调用模型。")
     if not has_root_git:

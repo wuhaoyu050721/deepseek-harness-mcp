@@ -6,6 +6,7 @@
       "args": [
         "-m",
         "harness_mcp.server",
+        "--shared",
         "--config",
         "D:/Tools/deepseek-harness-mcp/config/claude.local.toml"
       ]

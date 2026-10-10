@@ -2,7 +2,7 @@
 # 以下路径是通用示例，替换为实际解压或克隆目录。
 [mcp_servers.deepseek_harness]
 command = "D:/Tools/deepseek-harness-mcp/.venv/Scripts/python.exe"
-args = ["-m", "harness_mcp.server", "--config", "D:/Tools/deepseek-harness-mcp/config/codex.local.toml"]
+args = ["-m", "harness_mcp.server", "--shared", "--config", "D:/Tools/deepseek-harness-mcp/config/codex.local.toml"]
 cwd = "D:/Tools/deepseek-harness-mcp"
 startup_timeout_sec = 30
 tool_timeout_sec = 30
