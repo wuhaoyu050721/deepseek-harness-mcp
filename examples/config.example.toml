@@ -1,0 +1,38 @@
+# 复制到 config/*.local.toml 后按本机绝对路径修改。不要填明文密钥。
+data_dir = "../data/codex"
+
+[model]
+provider = "deepseek-official"
+model = "deepseek-flash"
+base_url = "https://api.deepseek.com/anthropic"
+credential_source = "desktop_store"
+credential_env = "DEEPSEEK_API_KEY"
+
+[executor]
+# 使用本机桌面安装自带 runtime；空安装路径表示自动检测。
+backend = "desktop"
+desktop_root = ""
+# 以下资源和租约设置仅用于可选的 docker backend。
+image = "deepseek-harness-worker:0.1.0"
+cpus = 1.0
+memory_mb = 1024
+pids_limit = 128
+lease_seconds = 15
+heartbeat_seconds = 2
+termination_grace_seconds = 3
+
+[limits]
+max_queue = 5
+default_timeout_seconds = 600
+max_timeout_seconds = 1800
+max_file_bytes = 2097152
+max_snapshot_bytes = 104857600
+max_output_bytes = 1048576
+
+[projects.sample]
+path = "C:/absolute/path/to/an/authorized/git/project"
+allowed_paths = ["src", "README.md"]
+exclude_patterns = []
+allow_untracked = []
+# 默认仅允许审查；本机明确授权修改后设为 true。修改仅作用于任务副本。
+allow_edits = false

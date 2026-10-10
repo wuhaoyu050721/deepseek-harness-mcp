@@ -1,0 +1,34 @@
+[project]
+name = "deepseek-harness-mcp"
+version = "0.3.1"
+description = "DeepSeek Harness MCP 本地审查与副本修改任务服务"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "deepseek-harness-sdk==0.1.5rc1",
+    "mcp==2.3.0",
+    "pyyaml==6.0.3",
+]
+
+[project.scripts]
+harness-mcp = "harness_mcp.server:main"
+harness-mcp-doctor = "harness_mcp.doctor:main"
+harness-mcp-phase0 = "harness_mcp.probe:main"
+
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+phase0 = [
+    "pyyaml==6.0.3",
+]
+

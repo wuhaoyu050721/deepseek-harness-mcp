@@ -1,0 +1,10 @@
+# 合并到自己的 Codex config.toml；不要覆盖整个个人配置文件。
+# 以下路径是通用示例，替换为实际解压或克隆目录。
+[mcp_servers.deepseek_harness]
+command = "D:/Tools/deepseek-harness-mcp/.venv/Scripts/python.exe"
+args = ["-m", "harness_mcp.server", "--config", "D:/Tools/deepseek-harness-mcp/config/codex.local.toml"]
+cwd = "D:/Tools/deepseek-harness-mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 30
+# 仅在服务配置 credential_source="env" 时需要：
+# env_vars = ["DEEPSEEK_API_KEY"]

@@ -1,0 +1,7 @@
+# 仅把 Worker 源码及哈希锁送入构建上下文；不发送个人配置、任务、报告或 .git。
+**
+!Dockerfile
+!worker-requirements.lock
+!src/
+!src/harness_mcp/
+!src/harness_mcp/*.py

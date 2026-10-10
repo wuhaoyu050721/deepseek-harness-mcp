@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "deepseek_harness": {
+      "type": "stdio",
+      "command": "D:/Tools/deepseek-harness-mcp/.venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "harness_mcp.server",
+        "--config",
+        "D:/Tools/deepseek-harness-mcp/config/claude.local.toml"
+      ]
+    }
+  }
+}

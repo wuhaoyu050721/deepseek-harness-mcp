@@ -1,0 +1,4 @@
+interface:
+  display_name: "DeepSeek 编码委派"
+  short_description: "主 AI 先定实现方案，再委派 DeepSeek 编码并复核合入"
+  default_prompt: "使用 $deepseek-delegate：先由主 AI 给出实现方法和验收条件，再让 DeepSeek 完成重复编码，最后由主 AI 复核合入并验证。"

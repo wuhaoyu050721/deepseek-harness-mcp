@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-10T12:40:26.393948+00:00",
+  "service_version": "0.3.1",
+  "status": "passed",
+  "scope": "windows_release_regression_and_source_installation_with_prior_same_source_model_acceptance",
+  "environment": {
+    "platform": "Windows",
+    "python": "3.14.7",
+    "mcp": "2.3.0",
+    "harness_sdk": "0.1.5rc1",
+    "desktop_runtime": "0.2.0-rc.2"
+  },
+  "regression": {
+    "passed_tests": 499,
+    "passed_subtests": 27,
+    "junit": {
+      "tests": 526,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "new_release_packaging_cases": 34,
+    "new_setup_cases": 4,
+    "model_task_submitted": false
+  },
+  "security_regressions": {
+    "SEC-01": {
+      "status": "passed",
+      "required_regressions": [
+        "test_snapshot_does_not_execute_real_clean_filter",
+        "test_outside_scope_filter_and_source_are_not_read",
+        "test_missing_promisor_tree_fails_without_remote_helper"
+      ],
+      "missing_or_failed": []
+    },
+    "SEC-02": {
+      "status": "passed",
+      "required_regressions": [
+        "test_auth_labels_share_full_quoted_value_redaction",
+        "test_quoted_json_secret_never_exports_hash_bound_patch",
+        "test_wire_escaped_auth_value_is_removed_before_degraded_save",
+        "test_dangling_quote_escape_cannot_leave_auth_in_degraded_output"
+      ],
+      "missing_or_failed": []
+    },
+    "SEC-03": {
+      "status": "passed",
+      "required_regressions": [
+        "test_sensitive_keys_and_long_values_are_checked_before_limits",
+        "test_worker_contract_rejects_untrusted_error_keys_and_field_types"
+      ],
+      "missing_or_failed": []
+    },
+    "SEC-04": {
+      "status": "passed",
+      "required_regressions": [
+        "test_owner_crash_after_atomic_creation_before_resume_has_no_orphan",
+        "test_attribute_cleanup_interrupt_closes_untransferred_native_handles",
+        "test_fresh_host_runs_snapshot_and_edit_collection_with_real_manager_commands"
+      ],
+      "missing_or_failed": []
+    },
+    "SEC-05": {
+      "status": "passed",
+      "required_regressions": [
+        "test_more_than_10000_confirmed_history_records_cannot_block_recovery",
+        "test_confirmed_history_above_10000_does_not_block_desktop_recovery",
+        "test_no_pending_database_cannot_ignore_unconfirmed_desktop_history"
+      ],
+      "missing_or_failed": []
+    },
+    "source_hardlink_hardening": {
+      "status": "passed",
+      "required_regressions": [
+        "test_source_hardlink_is_refused",
+        "test_source_link_count_change_while_reading_is_refused"
+      ],
+      "missing_or_failed": []
+    },
+    "mechanical_patch_integrity_hardening": {
+      "status": "passed",
+      "required_regressions": [
+        "test_edit_rejects_self_consistent_patch_that_disagrees_with_verified_bytes"
+      ],
+      "missing_or_failed": []
+    }
+  },
+  "source_module_sha256": {
+    "src/harness_mcp/__init__.py": "c15ff94544867ab8acc7c0adf255fbaef3352b396964cd5645785031a94a077b",
+    "src/harness_mcp/config.py": "7c70684a1f7df3d3841f01606598423f8454ebfcb8871b6b14c07bde12c073e1",
+    "src/harness_mcp/desktop_launcher.py": "9c21c99b5aefaa2c3a12f54039077332c01682979f60d2e6bcfbea3627730df5",
+    "src/harness_mcp/desktop_runner.py": "f66a594839a1684a8c02be0da18b015c888cf755741a9f9c5d48c18778254671",
+    "src/harness_mcp/desktop_worker.py": "fbb567fddf448b2a16b69f3906e711926b5758f70fbaaca435c34121d48a4d61",
+    "src/harness_mcp/doctor.py": "1e86e039b563e754671d2e2156da51c4167bcef6248023d8bda65dbb1e064d76",
+    "src/harness_mcp/edit_collect_worker.py": "2eefc731435b23d2fbe94c91fce6f2a23e68f57cb5b4c9e706682473da0dedc0",
+    "src/harness_mcp/edit_workspace.py": "b41ca84c670437abdc0f08d5b71b1b620474341c634a4aa2314906a69c822788",
+    "src/harness_mcp/errors.py": "4af507149cdfffd39a030ac7771d6c1d74d5fc655322281418efd1b52f1f3bca",
+    "src/harness_mcp/harness_adapter.py": "07599a798259f30c859c00d6bd58a8255836296c004d7943ab5c26ba7760f169",
+    "src/harness_mcp/instance_lock.py": "f853da78825eb9a135e19298d70c2f5d8be6baec618e6902c24e9286c645d569",
+    "src/harness_mcp/job_store.py": "b62b2f1fdbef552a5f0848d3391a6030aafb2d707c05f5143005383c0d4f6f80",
+    "src/harness_mcp/probe.py": "5787e2390d2f567c839a13188a16378925cd2fcb2ff292f16c7b51d52873851d",
+    "src/harness_mcp/process_control.py": "4cca4bb07cb653a797815ac59896ceff1a1b8a1403d694c7fe9e0f6ca47dc383",
+    "src/harness_mcp/redaction.py": "841d87e15696ba562cd21e2558ecf6ffa5d3303cd61f06cb380074d0d29849ac",
+    "src/harness_mcp/report.py": "d9e5c1d122a7d81998794d3df0827a2e197c99cc302d6db5341ec24a38e9ddb5",
+    "src/harness_mcp/review_prompt.py": "7a5290b8698d5d29ccdf32c0b27aa218c1cca54fe4788151e6899be7c93f5d29",
+    "src/harness_mcp/runner.py": "55884a1efda9e4adfc942c149c3064e9673bef3b0f5beb1d74bf5f4027ba9878",
+    "src/harness_mcp/server.py": "d89a687da3f6c6863752bea9da5033cc629db3658e75c6d143d73165d9bffcfc",
+    "src/harness_mcp/snapshot_worker.py": "a34aaa261e8020eb599c3dfe2dbf37a5088ca132a60549dcce76031768793e33",
+    "src/harness_mcp/supervisor.py": "dce564ddd96eb8361c86e9581111e8d7eca743119a75fd9aef06d0f92305331f",
+    "src/harness_mcp/task_manager.py": "4edb81e65ed082125ab9e936f54dae634cd253a305a4f529fb727cf343ce5b92",
+    "src/harness_mcp/worker.py": "f2b164d5bc9e87bf751b4fb3e6ce839bd1126753f7d14a5a3a3834c68dbb41d2",
+    "src/harness_mcp/workspace.py": "bb38e1a570de3945d908af17b71e76fa914677b29cb5f6a7cfaae16477ea8f62"
+  },
+  "protocol": {
+    "status": "passed",
+    "stdout_jsonrpc_only": true,
+    "stdin_eof_exit_code": 0,
+    "model_task_submitted": false,
+    "scope": "same_service_source_protocol_record_prior_to_documentation_and_release_script_changes"
+  },
+  "installed_client_discovery": [
+    {
+      "client": "codex",
+      "status": "passed",
+      "version": "codex-cli 0.162.0-alpha.17.2",
+      "model_called": false,
+      "handshake_verified": true,
+      "four_tools_discovered": true
+    },
+    {
+      "client": "claude",
+      "status": "passed",
+      "version": "2.1.273 (Claude Code)",
+      "model_called": false,
+      "handshake_verified": true,
+      "four_tools_discovered": true
+    }
+  ],
+  "source_zip_installation": {
+    "status": "passed",
+    "scope": "extracted_source_new_venv_no_git_no_model_task",
+    "checks": {
+      "locked_dependency_install": {
+        "exit_code": 0,
+        "status": "passed"
+      },
+      "zip_initialization": {
+        "exit_code": 0,
+        "status": "passed"
+      },
+      "desktop_prerequisites": {
+        "exit_code": 0,
+        "status": "passed"
+      }
+    },
+    "mcp": {
+      "status": "passed",
+      "service_version": "0.3.1",
+      "four_tools_discovered": true,
+      "edit_schema_verified": true,
+      "model_task_submitted": false
+    },
+    "sample_only_authorized": true,
+    "personal_client_configuration_unchanged": true
+  },
+  "codex_desktop_real_edit": {
+    "status": "passed",
+    "scope": "prior_same_service_source_real_model_artificial_project_static_generated_code_review",
+    "new_model_task_in_packaging_run": false,
+    "desktop_execution_count": 1,
+    "report_tests": "not_run",
+    "generated_code_execution": "not_run",
+    "generated_code_applied": false,
+    "behavior_checks": {
+      "scope": "static_ast_only_no_generated_code_execution",
+      "python_ast_valid": true,
+      "average_empty_value_error_guard": true,
+      "withdraw_amount_value_error_guards": true,
+      "normal_return_expressions_preserved": true
+    },
+    "source_hash_unchanged": true,
+    "complete_diff_and_after_content_reconstructed": true,
+    "client_saved_report_digest_verified": true,
+    "immutable_baseline_hash_verified": true,
+    "actual_workspace_hash_verified": true,
+    "owned_desktop_tree_stopped": true,
+    "dedicated_homes_cleaned": true,
+    "idempotent_replay_verified": true,
+    "owned_codex_process_tree_stopped": true,
+    "personal_config_hash_unchanged": true
+  },
+  "privacy": {
+    "original_raw_records_published": false,
+    "personal_configuration_published": false,
+    "task_data_published": false,
+    "credential_store_published": false
+  },
+  "unverified": [
+    "actual_docker_build_and_container_isolation",
+    "linux_or_macos_runtime",
+    "python_3_11_to_3_13_runtime",
+    "claude_full_model_task",
+    "active_model_request_cancel_and_provider_billing",
+    "gui_hot_reload"
+  ],
+  "desktop_os_filesystem_sandbox": false,
+  "desktop_os_network_sandbox": false
+}
