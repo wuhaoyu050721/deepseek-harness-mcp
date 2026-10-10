@@ -344,7 +344,7 @@ async def serve(
     config_path: Path | None = None,
 ) -> None:
     """启动一个独立后台；前端断开不触发管理器关闭或任务取消。"""
-    from .shared_bootstrap import prepare_private_runtime, write_private_json
+    from .shared_bootstrap import configuration_digest, prepare_private_runtime, write_private_json
 
     if manager_factory is None:
         from .conversation import SessionManager
@@ -352,6 +352,11 @@ async def serve(
 
     if not _valid_hex(token) or not _valid_hex(config_digest):
         raise _protocol_error()
+    if config_path is not None:
+        config_path = Path(config_path).resolve()
+        # 正式后台归属绑定原配置文件；无路径只用于已有直接注入的测试/嵌入调用。
+        if configuration_digest(config, config_path) != config_digest:
+            raise HarnessError("SHARED_CONFIG_MISMATCH", "共享后台启动配置来源或运行设置与已授权配置不同。")
     if isinstance(idle_seconds, bool) or not isinstance(idle_seconds, (int, float)) or not math.isfinite(idle_seconds) or not 0.01 <= idle_seconds <= 3600:
         raise _protocol_error()
     if nonsecret_environment is None:
@@ -432,7 +437,7 @@ def main() -> None:
         environment = _check_nonsecret_environment(bootstrap.get("nonsecret_environment", {}), credential_env)
         os.environ.update(environment)
         config = load_config(args.config.resolve())
-        digest = configuration_digest(config)
+        digest = configuration_digest(config, args.config.resolve())
         if bootstrap.get("config_digest") != digest:
             raise HarnessError("SHARED_CONFIG_MISMATCH", "共享后台启动配置与已授权配置不同。")
         asyncio.run(serve(config, args.bootstrap.parent, bootstrap["token"], digest,

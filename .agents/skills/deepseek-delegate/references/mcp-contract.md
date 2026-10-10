@@ -2,7 +2,7 @@
 
 本文件依据配套 MCP 的源代码编写。调用时以客户端真实暴露的 schema 和可信本机配置为准；不能为了兼容而绕过服务端约束。
 
-0.3.4 增加预检和服务信息工具：直接模式六工具、共享模式九工具；completion 开启后分别为九和十二工具。旧连接可继续使用当时的工具 schema，不伪造新增参数。
+当前契约为 0.3.5，沿用 0.3.4 增加的预检和服务信息工具：直接模式六工具、共享模式九工具；completion 开启后分别为九和十二工具。0.3.5 动态读取原文件授权，不新增工具或权限参数。旧连接可继续使用当时的工具 schema，不伪造新增参数；加载新代码仍需完成一次旧后台切换。
 
 `harness_result(view=...)` 的执行状态与 `quality` 分开：引用质量只统计保留问题（valid/invalid/unknown），报告格式失败无问题时为 unavailable，不能当作无风险。补丁 available_for_review 不等于主 AI 已核对当前源码或合入；current_source_match=not_checked，source_applied=false，tests=not_run。新增视图游标绑定 view/job/report digest/page_size；旧游标只可用于 full，跨视图读取返回 INVALID_CURSOR。轻视图自然元数据只在首页返回。
 
@@ -17,7 +17,7 @@
 | 工具 | 参数 | 用途 |
 |---|---|---|
 | `harness_preflight` | `project_id`；可选 `relative_paths`、`mode` | 无模型源码预检；命中仅返回规则、路径、行号 |
-| `harness_service_info` | 无 | 当前/磁盘配置版本、重连需求、连接和任务数量 |
+| `harness_service_info` | 无 | 刷新原文件授权，返回权限/配置版本、更新状态、重连需求、连接和任务数量 |
 | `harness_submit` | 必填 `project_id`、`prompt`、`client_request_id`；可选 `relative_paths`、`timeout_seconds`、`mode` | 返回任务回执，不代表完成 |
 | `harness_status` | `job_id` | 查询状态、阶段、耗时、错误、停止失败情况 |
 | `harness_result` | `job_id`，可选 `cursor`、`page_size`、`view`（full/summary/patch/files） | 分页读取已保存报告；`ready=false` 表示尚无报告 |
@@ -47,9 +47,13 @@
 
 编辑要求可信项目配置 `[projects.<id>] allow_edits=true`，当前只支持 `desktop`。`EDIT_NOT_ALLOWED` / `EDIT_BACKEND_UNSUPPORTED` / `PROJECT_NOT_ALLOWED` 需要处理真实能力缺口；不要自动改配置或转用只读任务执行写入。
 
+0.3.5 仅允许原可信 TOML 中已有项目的 allow_edits、allowed_paths、exclude_patterns、allow_untracked 动态变化。每次 submit/preflight/session_open/session_send/service_info 从启动绑定的同一文件重读验证；纯权限变化允许旧/新连接继续复用后台。项目 ID 增删、根路径、default_mode、model、executor、limits、completion、data_dir、来源文件和代码仍属于固定运行身份，变化要求 CONFIG_RESTART_REQUIRED 或共享连接不匹配。RPC 不接受权限对象、任意配置路径或权限修改命令。
+
+service_info 公开 permissions_hot_reload、permissions_version、permissions_reload_state（current/updated/invalid/restart_required/unconfigured）、new_task_permissions_ready、permissions_error，及完整 config_version/disk_config_version/restart_required。updated 只说明本次读到了新权限；下一次一致读取可能为 current。new_task_permissions_ready 表示配置层可继续新任务权限校验，不代替本批范围、编辑许可或容量检查。PERMISSIONS_CONFIG_INVALID 阻止新授权操作，修复原文件后可再试；不静默沿用之前开放的权限。旧版客户端缺少这些字段时不臆测热更新成功。
+
 `relative_paths` 同时确定复制的读取范围和允许修改的范围，不能硬性区分只读依赖与写入文件。任务书另列两者，主 AI 以实际差异检查。“仅参考”文件若被修改，应拒绝该项改动。
 
-路径是项目内相对文件/目录前缀；拒绝绝对路径、`..`、UNC、盘符、ADS 和越界链接。省略参数使用配置范围，显式空数组拒绝。新增文件应授权其父目录。文件来自已保存的 Git tracked 文件及可信 `allow_untracked` 清单；编辑器中未保存内容不会进入快照，普通未跟踪文件也不会自动进入。
+路径是项目内相对文件/目录前缀；拒绝绝对路径、`..`、UNC、盘符、ADS 和越界链接。省略参数使用配置范围，显式空数组拒绝。0.3.5 的显式 relative_paths 必须整体为 allowed_paths 子集，过宽父目录或根请求返回 PATH_NOT_AUTHORIZED，不依赖快照过滤掩盖扩权。allowed_paths=[] 返回 EMPTY_AUTHORIZATION，撤销后续新读取。新增文件应授权其父目录。文件来自已保存的 Git tracked 文件及可信 allow_untracked 精确文件清单；编辑器中未保存内容不会进入快照，普通未跟踪文件也不会自动进入。
 
 默认提示上限 32000 字符，`relative_paths` 至多 256 项，默认超时 600 秒/配置默认上限 1800 秒；实际值可由可信配置改变。快照在准备阶段捕获，不是在回执时捕获。避免在执行期间同时修改本批目标文件。
 
@@ -58,11 +62,13 @@
 1. 保存提交参数与 `client_request_id`，收到回执保存 `job_id`。
 2. 回执 `auto_continue=true` 表示机制绑定，可继续独立工作；实际收到完成事件后才进入结果处理，不把 true 当作通知已被接收。没有绑定或渠道不可用时查询同一 job，按 `poll_after_seconds` 或更长间隔等待。直接模式保持一个执行位置；共享模式默认三个（可信配置1–8）和最多五个等待位置。同一会话按轮次顺序执行，互不依赖的子代理会话才可并行。
 3. `succeeded/failed/cancelled/timed_out/interrupted` 是终态；`cancelling` 尚未确认停止，`termination_failed=true` 不能当作取消成功。
-4. 响应丢失时，用原 ID、原参数恢复。新 ID 会启动新模型工作，可能重复计费。修改提示、模式、范围或超时而复用原 ID 会出现 `IDEMPOTENCY_CONFLICT`。
+4. 响应丢失时，用原 ID、原参数恢复。0.3.5 先恢复已接纳请求的原回执，再考虑新权限；撤销权限不使同 ID 重放。新 ID 会启动新模型工作，可能重复计费。修改提示、模式、范围或超时而复用原 ID 会出现 `IDEMPOTENCY_CONFLICT`。
 5. 服务重启不会重放旧未完成任务，可能记为 `interrupted`；明确需要重新执行时，使用新的 ID。
 6. 用户要求停止时调用 `harness_cancel`，再查询停止结果。取消本地执行器不能证明上游停止计费。
 
-改变可信默认模式后，旧 review 请求的恢复参数必须显式包含原 `mode="review"`，或直接读取已有 job_id；不要让新的默认 edit 改变旧请求指纹。
+0.3.5 底层恢复原请求时，省略模式和时限会沿用原存储值；显式传入不同值仍会产生指纹冲突。MCP 客户端可能把当前 schema 的默认模式显式传入，因此改变可信默认模式后，应保留原 `mode`（旧 review 请求为 `mode="review"`），或直接读取已有 job_id，避免新默认值改变旧请求参数。
+
+已接纳的 queued/running 作业使用 frozen_execution，权限更新不扩大、收缩或改写原作业。收紧权限只作用于后续新任务/新轮；立即停止旧执行要调用 cancel 并确认终态。权限文件无效时仍可读取原 result/status、请求 cancel、处理并确认完成事件。
 
 ## 共享连接与子代理会话
 
@@ -72,15 +78,17 @@
 - `harness_session_send(session_id, prompt, client_request_id, timeout_seconds=None)`：初次任务或继续追问，返回 `job_id`，之后复用原状态/结果/取消工具。
 - `harness_session_list(project_id=None, limit=20)`：找回会话和近期任务编号，不自动重放。
 
-一个 Codex 对话可以保存多个 `session_id`；不同项目窗口各自保存自己的会话。后台共享同一幂等数据库、全局并发上限与等待队列，会话对话历史与作业副本独立。`SESSION_BUSY` 表示上一轮未结束；`SESSION_CONFIG_CHANGED` 表示绑定授权发生变化，应创建新会话。请求编号不能跨创建会话/提交任务重复使用。网络回执丢失先用原编号和参数恢复，禁止自动换编号重复执行。
+一个 Codex 对话可以保存多个 `session_id`；不同项目窗口各自保存自己的会话。后台共享同一幂等数据库、全局并发上限与等待队列，会话对话历史与作业副本独立。`SESSION_BUSY` 表示上一轮未结束；`SESSION_CONFIG_CHANGED` 表示项目根或不变执行设置与会话绑定不同，不能把旧 session 改投新项目。请求编号不能跨创建会话/提交任务重复使用。网络回执丢失先用原编号和参数恢复，禁止自动换编号重复执行。
 
-共享后台在无连接但仍有未完成任务时继续运行；无连接且无任务30秒后退出。前端退出不触发取消。旧直接实例占用同一 `data_dir` 时，先结束旧连接后重连；不能删锁、清空历史或换随机目录绕过归属检查。变更可信权限/路由/实现会拒绝静默复用旧后台，等待原任务完成并空闲退出后重连。
+0.3.5 的新轮范围由会话原 allowed_paths 与当前 allowed_paths 求交，exclude_patterns 取并集，allow_untracked 仅按精确文件路径求交，edit 许可同时受原会话和当前授权限制。mode 与相对请求范围不隐式改变；原会话省略 relative_paths 也不会随本机放宽而扩大。需要不同模式/范围时建立新会话。session_list.configuration_current 单独报告运行绑定，permissions_available/permissions_error 单独报告当前新轮授权；配置无效时绑定状态可能为 null，保留旧会话/作业用于恢复。
+
+共享后台在无连接但仍有未完成任务时继续运行；无连接且无任务30秒后退出。前端退出不触发取消。旧直接实例占用同一 `data_dir` 时，先结束旧连接后重连；不能删锁、清空历史或换随机目录绕过归属检查。升级代码或变更固定运行身份时，等待原任务完成、关闭全部旧连接并空闲退出后重连。升级到 0.3.5 本身需要一次切换，后续原文件已有项目四权限字段变更不需要重启；不同 TOML 无法借相同数据目录混用授权。
 
 会话上下文由本机最近四轮脱敏报告重建，最多16000字符；不保留模型reasoning。每轮从当前授权源码生成新的副本，上一轮未合入的编辑不会自动传给下一轮。主 AI 须按实际差异合入并验证，再提交依赖该修改的任务。
 
 ## 完成事件与自动续跑
 
-0.3.3 在可信 `[completion] auto_continue=true` 时发现 watch/list/ack 三个完成事件工具，共享模式合计十工具；未开启时仍七工具，旧配置缺省 false。`auto_continue=true` 仅表示当前客户端完成机制已绑定，不证明宿主接收或主 AI 已处理。Codex thread/turn 元数据及动态本机 app-tools 通道须通过宿主能力/归属只读预检；失败返回 false 与 auto_continue_reason，普通模型任务仍接纳。CODEX_APP_TOOLS_PIPE_PATH 按客户端 env_vars 白名单透传，不硬编码路径。
+0.3.3 起在可信 `[completion] auto_continue=true` 时发现 watch/list/ack 三个完成事件工具；0.3.5 共享模式合计十二工具，未开启为九工具，直接模式对应九/六工具，旧配置缺省 false。`auto_continue=true` 仅表示当前客户端完成机制已绑定，不证明宿主接收或主 AI 已处理。Codex thread/turn 元数据及动态本机 app-tools 通道须通过宿主能力/归属只读预检；失败返回 false 与 auto_continue_reason，普通模型任务仍接纳。CODEX_APP_TOOLS_PIPE_PATH 按客户端 env_vars 白名单透传，不硬编码路径。
 
 普通 Claude 使用全部已启用审查、编辑、子代理工具，不因缺少通知能力退化为只读。实验 channel 另需服务 `--claude-channel`、客户端 `MCP_PROTOCOL_NEGOTIATION=legacy` 和交互启动 `--dangerously-load-development-channels server:deepseek_harness`。服务声明实验 claude/channel capability，使用官方通知格式；宿主不反馈渠道许可，绑定 true 不等于渠道已登记。[Claude Channels 参考](https://code.claude.com/docs/en/channels-reference)、[协议说明](https://code.claude.com/docs/en/mcp#push-messages-with-channels)
 

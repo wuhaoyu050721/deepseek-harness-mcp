@@ -6,8 +6,8 @@ from .shared_bootstrap import _validated_registry, configuration_digest, read_pr
 from .shared_client import open_authenticated, read_frame, write_frame
 
 
-async def inspect_existing_service(config) -> dict:
-    local = configuration_digest(config)
+async def inspect_existing_service(config, config_path=None) -> dict:
+    local = configuration_digest(config) if config_path is None else configuration_digest(config, config_path)
     result = {"state": "not_observed", "local_runtime_version": local,
               "runtime_version": None, "restart_required": None,
               "active_connections": None, "active_tasks": None, "queued_tasks": None}
@@ -54,10 +54,10 @@ async def inspect_existing_service(config) -> dict:
                 pass
 
 
-def service_diagnostics(config) -> dict:
+def service_diagnostics(config, config_path=None) -> dict:
     async def bounded():
         try:
-            return await asyncio.wait_for(inspect_existing_service(config), 5)
+            return await asyncio.wait_for(inspect_existing_service(config, config_path), 5)
         except asyncio.TimeoutError:
             return {"state": "timeout", "restart_required": None,
                     "active_connections": None, "active_tasks": None, "queued_tasks": None}

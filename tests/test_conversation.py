@@ -274,18 +274,19 @@ def test_secret_is_removed_before_history_assistant_truncation(session_config):
         assert assistant[-5:] == "[REDA"
 
 
-def test_changed_configuration_blocks_new_round_and_list_marks_stale(session_config):
+def test_permission_change_keeps_bounded_session_but_removed_project_is_unavailable(session_config):
     with metadata_manager(session_config) as manager:
         opened = asyncio.run(manager.session_open("alpha", "open-freeze", relative_paths=["src/sample.py"]))
         changed = dict(session_config.projects)
         changed["alpha"] = replace(changed["alpha"], allowed_paths=("src/sample.py",))
         manager.config = replace(session_config, projects=changed)
-        assert not manager.session_list("alpha")["sessions"][0]["configuration_current"]
-        with pytest.raises(HarnessError) as error:
-            asyncio.run(manager.session_send(opened["session_id"], "try drift", "send-freeze"))
-        assert_code(error.value, "SESSION_CONFIG_CHANGED")
+        available = manager.session_list("alpha")["sessions"][0]
+        assert available["configuration_current"] and available["permissions_available"]
+        accepted = asyncio.run(manager.session_send(opened["session_id"], "try scoped", "send-freeze"))
+        assert manager.store.get(accepted["job_id"])["execution"]["project"]["allowed_paths"] == ["src/sample.py"]
         manager.config = replace(session_config, projects={"beta": session_config.projects["beta"]})
-        assert not manager.session_list()["sessions"]
+        history = manager.session_list()["sessions"]
+        assert len(history) == 1 and not history[0]["configuration_current"] and not history[0]["permissions_available"]
         with pytest.raises(HarnessError) as error:
             asyncio.run(manager.session_send(opened["session_id"], "try removed", "send-removed"))
         assert_code(error.value, "SESSION_CONFIG_CHANGED")

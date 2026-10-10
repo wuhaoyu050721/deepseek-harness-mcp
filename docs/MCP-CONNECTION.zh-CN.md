@@ -1,8 +1,8 @@
 # Windows 上连接 DeepSeek Harness MCP
 
-本教程针对 0.3.4 的 Windows `desktop` 路线、`--shared` 多会话连接、Codex 桌面通知和可选 Claude 实验 channel。Codex 或 Claude Code 可以审查代码或修改授权副本，再由主 AI 复核、合入和验证。新 desktop 配置默认允许副本编辑；旧配置未设置新字段时保留审查默认。多会话至少需要 0.3.2；通知桥和可信默认模式需要 0.3.3。Codex 空闲唤醒、自动读取及实际完成工具入口，Claude 通道传输已验收；Claude 应用内续跑仍未验证。具体范围见 [验证记录](VALIDATION.md)，发布状态以 Releases 为准。
+本教程针对 0.3.5 的 Windows `desktop` 路线、动态项目权限、`--shared` 多会话连接、Codex 桌面通知和可选 Claude 实验 channel。Codex 或 Claude Code 可以审查代码或修改授权副本，再由主 AI 复核、合入和验证。新 desktop 配置默认允许副本编辑；旧配置未设置新字段时保留审查默认。多会话至少需要 0.3.2；通知桥和可信默认模式需要 0.3.3，动态项目权限需要 0.3.5。Codex 空闲唤醒、自动读取及实际完成工具入口，Claude 通道传输已验收；Claude 应用内续跑仍未验证。具体范围见 [验证记录](VALIDATION.md)，发布状态以 Releases 为准。
 
-0.3.4 使用 `harness_service_info` 查询当前/磁盘配置版本、重连需求和活动连接/任务数量。`config_state=changed`、`restart_required=true` 表示当前连接仍用旧权限；先完成或取消原任务，关闭所有旧连接，待后台空闲退出后重连。磁盘配置损坏时状态为 invalid，重启需求为未知，先修复配置；不自动重载或取消任务。doctor 可只读连接已存在后台检查版本；旧后台不支持新接口时计数为未知。
+0.3.5 使用 `harness_service_info` 刷新原可信 TOML 中已有项目的权限，同时查询权限/配置版本、更新状态、重连需求和活动连接/任务数量。四个权限字段变更无需重启，旧连接和新连接均可使用原后台；运行设置或配置来源变化时 `restart_required=true`，需完成或取消原任务、关闭全部旧连接并等待后台退出后重连。磁盘配置无效时新任务受阻，修复原文件后可再次检查；原任务不自动取消。doctor 可只读连接已存在后台检查版本；旧后台不支持新接口时计数为未知。
 
 提交任务前可调用 `harness_preflight(project_id, relative_paths, mode)`，不调用模型或改项目，命中仅返回脱敏规则、相对路径和行号。正式任务仍重新检查源码。结果用 `harness_result(view="summary")` 先看摘要、问题及 `quality`，再按需取 patch 或 files；同一视图沿 next_cursor 完整取回，切换视图清空游标。full 兼容旧调用。执行完成与引用有效计数分开，available_for_review 只表示机械补丁供复核，尚未检查当前源文件。未绑定通知时遵守回执的2/5/10/20秒自适应间隔；有原对话完成通知时继续独立工作并等待通知。
 
@@ -234,6 +234,8 @@ Codex 重连同一可信主对话时，可用 `harness_watch` 恢复同一目标
 
 共享后台和 DeepSeek 子会话是两层关系：多个 Codex/Claude 连接复用一个后台，每个连接可以建立一个或多个 `session_id`。子会话固定 `project_id`、`mode` 和 `relative_paths`，各自保留上下文和任务编号；继续发送时不能临时切换项目或扩大范围。需要另一个项目、模式或范围时，建立新的子会话。
 
+已有子会话的新轮还要遵守当前权限：允许范围取原范围与当前 allowed_paths 的交集，排除规则取并集，allow_untracked 按精确文件路径求交；本机放宽不会扩大旧会话，mode 不会隐式改变。`harness_session_list` 的 `configuration_current` 表示项目和运行绑定是否匹配，`permissions_available`/`permissions_error` 单独表示当前能否接纳该会话的新轮。权限撤销时保留会话、任务编号及原结果；需要新的授权范围时创建新会话。
+
 三个会话工具的参数如下：
 
 | 工具 | 参数及返回 |
@@ -298,15 +300,52 @@ allow_untracked = []
 allow_edits = true
 ```
 
-`project_id` 使用 `my_project`；`path` 必须是该机绝对路径；`allowed_paths` 是项目内的相对文件或目录前缀。工具参数不能自行切换到任意本机目录。共享后台固定启动时的配置，修改授权后请先完成或取消现有任务，关闭使用该配置的全部连接，等待后台空闲退出，再重新连接。仅关闭一个窗口不能替换其他会话正在使用的配置。
+`project_id` 使用 `my_project`；`path` 必须是该机绝对路径；`allowed_paths` 是项目内的相对文件或目录前缀。新增项目、改变已有项目编号或根路径需要切换后台：完成或取消现有任务，关闭使用该配置的全部连接，等待后台空闲退出，再重新连接。工具参数不能自行切换到任意本机目录。
 
 源项目需要是 Git 工作树。默认只取已保存的 Git tracked 文件；编辑器中尚未保存的内容不会复制，未跟踪文件也不会自动进入。若确实需要纳入某个未跟踪文件，在可信本机配置中逐个添加，比如 `allow_untracked = ["src/new_feature.py"]`。目录授权不能代替未跟踪文件的逐个授权。
 
 服务会排除常见凭证、私钥、依赖和缓存路径，但规则不能识别所有硬编码秘密。请只授权任务实际需要的范围；文件会复制到本机任务数据目录，并可能通过模型接口提交给服务商。
 
+### 动态调整已有项目权限
+
+运行 0.3.5 后，在后台启动时使用的同一 TOML 中修改已有项目的以下四项，保存即可，无需重启 Codex 或 Claude Code：
+
+| 字段 | 对后续新任务/新轮的作用 |
+| --- | --- |
+| `allow_edits` | false 禁止 edit，true 允许在其他授权满足时修改副本；review 不要求编辑权限 |
+| `allowed_paths` | 本机读取及修改范围上限；空列表 `[]` 撤销新任务读取权限 |
+| `exclude_patterns` | 在授权范围内进一步排除文件 |
+| `allow_untracked` | 按精确文件路径允许纳入未跟踪文件，不接受目录代替逐文件许可 |
+
+例如暂时只让后续任务审查 `src/payments`，保持该项目原来的 `path`，将其权限字段改为：
+
+```toml
+allow_edits = false
+allowed_paths = ["src/payments"]
+exclude_patterns = ["**/private.*"]
+allow_untracked = []
+```
+
+下一次 submit、preflight、session_open、session_send 或 service_info 会从原文件重新读取和验证。没有任意权限内容、其他配置文件路径或“放开权限”的 MCP 参数。具体任务建议明确 `mode="review"`/`"edit"` 与最小 `relative_paths`；显式范围必须整体属于 allowed_paths，比如上例不能请求 `relative_paths=["src"]` 或 `["."]`，服务会在接纳前返回 `PATH_NOT_AUTHORIZED`，不会依靠复制时过滤来掩盖过宽请求。
+
+保存后调用 `harness_service_info`，核对这些字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `permissions_hot_reload` | 已绑定可信权限文件，可在后续请求重新读取 |
+| `permissions_version` | 当前项目权限指纹；不返回权限文件内容或密钥 |
+| `permissions_reload_state` | current：当前一致；updated：本次加载了变化；invalid：文件不可读/无效；restart_required：运行设置变化；unconfigured：未绑定文件 |
+| `new_task_permissions_ready` / `permissions_error` | 配置可用于新任务权限校验，或固定失败码；true 不代表某个项目、范围或队列容量已获接纳 |
+| `config_version` / `disk_config_version` | 当前完整配置版本与已读取磁盘版本；无效磁盘版本可能为空 |
+| `restart_required` | 运行设置变化需切换后台；纯权限变化不需要；未绑定来源时可能未知 |
+
+配置损坏、无法读取或来源不符时返回 `PERMISSIONS_CONFIG_INVALID`，新任务受阻。修复原文件后再次调用即可；不静默继续使用此前开放的权限。排队和运行任务使用接纳时已冻结的权限，保存更严格的配置不会修改或自动终止它们；需要立即停止时调用 `harness_cancel(job_id)` 并确认停止。已有请求编号及相同参数先恢复原回执，不重新执行模型，即使当前权限已收紧也可以恢复；结果、状态、取消及完成确认仍可使用。
+
+增加/删除项目、改变项目根、default_mode、model、executor、limits、completion、data_dir、配置文件来源或代码仍需要后台切换。升级到 0.3.5 也需要一次关闭旧后台；代码切换后，这四个权限字段的修改才无需重启。另一个 TOML 文件不能借相同数据目录替换活动后台的授权来源。
+
 ### 允许修改副本
 
-项目 `allow_edits=true` 表示允许 DeepSeek 修改该授权范围的任务副本；只读任务显式传 `mode="review"`，不用反复切换权限。若确实要长期禁止此项目编辑，设置 `allow_edits=false`，并只提交 review。修改可信授权本身仍须按上一段切换后台；新 desktop 默认 `default_mode="edit"`，旧配置默认 review，编码可显式使用 `mode="edit"`。配置中的读取范围也是允许修改的范围，新增文件需要授权其父目录。
+项目 `allow_edits=true` 表示允许 DeepSeek 修改该授权范围的任务副本；只读任务显式传 `mode="review"`，不用反复切换权限。需要禁止后续副本编辑时将原文件的 `allow_edits` 改为 false，下一次新任务自动检查，无需重启。新 desktop 默认 `default_mode="edit"`，旧配置默认 review，建议具体编码任务显式使用 `mode="edit"` 和最小范围。配置中的读取范围也是允许修改的范围，新增文件需要授权其父目录。开放本机范围上限并不授权自动写回原项目。
 
 编辑任务只修改独立副本，不直接改原项目。主 AI 应先确定实现方法、接口、边界和验收条件，再提交明确的一批任务；DeepSeek 在副本写代码，不运行项目测试、程序、安装、构建或 Git。模型完成后，主 AI 读取真实完整差异并验证后才能合入。
 
@@ -335,13 +374,13 @@ if (Test-Path -LiteralPath $delegateDestination) {
 
 ## 7. 任务恢复、取消和常见问题
 
-每次任务都保存 `client_request_id`、完整参数、最终模式和返回的 `job_id`。响应丢失时使用原编号及完全相同参数恢复；新编号会启动新的模型工作，可能重复计费。默认模式升级后恢复旧任务应显式传原 `mode="review"`，或直接按旧 job_id 读取，避免将省略模式解释为新的 edit 参数。改了提示、模式、范围或时限，却继续用旧编号，会触发 `IDEMPOTENCY_CONFLICT`。共享后台统一执行配置中的容量限制，各前端不会各自创建额外执行器绕过这些限制。
+每次任务都保存 `client_request_id`、完整参数、最终模式和返回的 `job_id`。响应丢失时使用原编号及完全相同参数恢复；新编号会启动新的模型工作，可能重复计费。0.3.5 底层恢复原请求时，省略模式和时限会沿用原存储值；MCP 客户端可能把当前 schema 默认模式显式传入，因此默认模式升级后应保留原 `mode`（旧 review 请求为 `mode="review"`），或直接按旧 job_id 读取。改了提示、模式、范围或时限，却继续用旧编号，会触发 `IDEMPOTENCY_CONFLICT`。共享后台统一执行配置中的容量限制，各前端不会各自创建额外执行器绕过这些限制。
 
 多会话共享的前提是同一 Windows 用户、同一可信服务配置、同一数据目录，以及匹配的服务代码和解释器。各前端仍是独立 stdio 连接，但请求进入同一个 TaskManager 和 SQLite 历史：相同请求编号和参数返回同一任务，不会因另开窗口再执行一次；一个会话提交后，其他连接到该后台的会话可以按 `job_id` 查询、读取结果或请求取消。任务读取仍共用配置授权，完成事件的通知、列表和确认则绑定原主对话，不能改投其他窗口。
 
 需要停止时调用 `harness_cancel(job_id)`，再查询停止结果。`cancelling` 不是已停止；`termination_failed=true` 表示未确认停止。停止查询、关闭单次等待或断开界面都不等于取消任务。关闭一个前端只断开该会话，其他连接和后台任务继续；最后一个前端断开后，只要有等待或运行任务，后台仍继续工作，无连接且无任务时默认空闲 30 秒后安全退出。停止未确认时后台保留归属和锁并阻止新执行。取消本机进程也不能证明服务商停止计费。服务重启不会自动重放未完成任务，旧任务可能标为 `interrupted`。
 
-升级服务代码、调整模型或项目权限后，旧后台不能直接接受新配置。先完成或取消旧任务、关闭全部旧连接，等待后台退出，再重新连接。首次由直接模式切换时也需要先关闭占用原 `data_dir` 的旧服务。不带 `--shared` 的直接模式仍实行单实例锁，只适合一个连接使用；不要删除 `service.lock`、任务数据库或归属记录，也不要改用随机数据目录绕过恢复检查。
+升级服务代码、调整模型或其他运行设置后，旧后台不能直接接受新配置。先完成或取消旧任务、关闭全部旧连接，等待后台退出，再重新连接。0.3.5 中原文件已有项目的四项权限变更无需重启；先查询 service_info 确认更新和新任务授权状态。首次由直接模式切换时也需要先关闭占用原 `data_dir` 的旧服务。不带 `--shared` 的直接模式仍实行单实例锁，只适合一个连接使用；不要删除 `service.lock`、任务数据库或归属记录，也不要改用随机数据目录绕过恢复检查。
 
 | 现象或错误 | 处理方法 |
 | --- | --- |
@@ -349,17 +388,20 @@ if (Test-Path -LiteralPath $delegateDestination) {
 | 握手时 `connection closed: initialize response` | 查看该 MCP 启动时的安全错误输出。doctor 只检查前置条件，不能证明初始化握手成功；按下面的具体错误处理，不先认定是 API key。 |
 | `INSTANCE_LOCKED` | 直接模式的另一个服务占用了同一数据目录。确认当前注册包含 `--shared`；切换前先完成或取消旧任务并关闭旧服务。保留锁文件、数据库和归属记录。 |
 | `SHARED_BACKEND_UNAVAILABLE` | 数据目录仍由旧直接实例占用，或后台归属尚未确认。先核对并关闭旧连接、确认任务安全停止，不删除登记记录或换目录绕过。 |
-| `SHARED_CONFIG_MISMATCH` | 已运行后台的配置、授权范围或代码版本不同。完成或取消旧任务，关闭全部旧连接，等待后台退出，再用一致的配置重新连接。 |
+| `SHARED_CONFIG_MISMATCH` / `CONFIG_RESTART_REQUIRED` | 配置来源、项目编号/根、运行设置或代码版本不同。完成或取消旧任务，关闭全部旧连接，等待后台退出，再用一致来源和运行设置重连；0.3.5 的四项权限变更本身不会要求后台退出。 |
+| `PERMISSIONS_CONFIG_INVALID` | 原可信权限文件不可读、无效或来源变化。修复启动时的同一 TOML，再查询服务信息；保留原任务与结果，不放宽文件归属检查。 |
+| `PATH_NOT_AUTHORIZED` / `EMPTY_AUTHORIZATION` | 单次范围比 allowed_paths 更宽，或本机范围已为空。收窄显式 relative_paths；需要新授权时在原可信 TOML 修改已有项目字段，不用重启，不自动扩权。 |
 | `SHARED_LAUNCH_FAILED` / `SHARED_START_TIMEOUT` | 共享后台未能独立启动，或未在启动期限内就绪。核对 Windows WMI/CIM 服务、Python 绝对路径及私有目录权限，并设置 Codex `startup_timeout_sec = 30`；不要反复启动新任务。 |
 | `SHARED_STORAGE_UNSAFE` / `SHARED_AUTH_FAILED` | 私有登记目录或本机认证未通过检查。确认目录属于当前用户且没有链接、重解析或权限漂移；保留现有任务和归属，不放宽认证检查。 |
 | `SHARED_CREDENTIAL_MISMATCH` | 使用环境变量凭证的连接携带了不同 API key。共享后台不会在活动任务中切换凭证；先统一客户端环境，完成后台切换后重连，不发送密钥值。 |
 | `SHARED_CONNECTION_LOST` / `SHARED_CONNECTION_CLOSED` | 当前前端连接已丢失或关闭，后台任务未因此取消。重新连接后用原请求编号及完全相同参数恢复，或用已保存的 `job_id` 查询；不改编号重复提交。 |
 | `SHARED_PROTOCOL_INVALID` | 本机连接收到不符合约定的数据。核对各客户端使用相同安装版本，完成后台切换后重连；不回显原始协议包或凭证。 |
 | `SESSION_BUSY` | 同一子会话仍有未完成任务。按已保存的 `job_id` 查询、读取结果或确认取消后再发送下一轮；需要独立并发工作时另建具有明确范围的子会话。 |
+| `SESSION_CONFIG_CHANGED` | 子会话绑定的项目根或运行设置发生变化，不能把旧 session 改投新项目。完成必要后台切换后按新绑定创建会话；纯权限变更通过列表的 permissions_available/permissions_error 另行判断。 |
 | `DESKTOP_RUNTIME_UNAVAILABLE` | 确认桌面端安装完整，非默认位置填写 `desktop_root`；不能用一个仅存在的空目录代替安装。 |
 | `MODEL_CREDENTIAL_UNAVAILABLE` / `CREDENTIAL_UNAVAILABLE` | 检查可信配置指定的固定 API key 引用或环境变量。账号已登录、凭证文件存在，都不等于该引用可用；不要将密钥贴进任务或报告。 |
 | doctor 成功，模型仍失败 | doctor 是前置检查；另核对 API key 有效性、余额、API 地址、模型名及接口兼容性。查看安全错误，不先换新编号重复提交。 |
-| `PROJECT_NOT_ALLOWED` / `EDIT_NOT_ALLOWED` | 检查所用客户端 TOML 的项目编号和 `allow_edits`，保存后重新连接。Skill 不能绕过服务授权。 |
+| `PROJECT_NOT_ALLOWED` / `EDIT_NOT_ALLOWED` | 检查原可信 TOML 中的项目编号和 allow_edits；0.3.5 已有项目的编辑开关保存后下一次自动检查，新增项目仍需切换后台。Skill 不能绕过服务授权。 |
 | 工具仍没有 `mode` 或编辑参数 | 当前连接可能缓存旧版本。重启 MCP 服务或客户端，再核对实时 schema；不要用 `review` 执行写入。 |
 | `auto_continue=false` 或没有完成通知 | 检查可信 completion 开关、实际 Codex 桌面宿主上下文与本机通道；工具发现本身不证明可唤醒。已接纳任务仍按原 job_id 查询，不重新调用模型。 |
 | 完成事件为 `uncertain` | 通知可能已经被宿主接收，禁止盲目重复发送。原对话用 `harness_completion_list` 找回，读取完整结果并处理后 ack。 |
@@ -376,4 +418,4 @@ Windows `desktop` 路线使用独立副本和受监管进程，但没有操作�
 
 ## 命令核对范围
 
-本教程的服务参数和工具契约面向 0.3.4；通知与宿主工具入口的分项验收见 [验证记录](VALIDATION.md)，Claude 应用内续跑仍未验证。既有 CLI 注册格式在 0.3.1 编写时以 `codex mcp add --help`、`codex mcp list --help`、`claude mcp add-json --help` 和 `claude mcp list --help` 核对，使用的客户端版本为 Codex CLI `0.162.0-alpha.17.2`、Claude Code `2.1.273`；历史工具发现、多会话和模型成功不代替自动续跑验收。客户端升级后如提示参数变化，以该机 `--help` 和官方文档为准。安装依赖、doctor、工具发现、多会话生命周期、真实模型调用、通知送达和主 AI 处理确认应分别验证。
+本教程的服务参数和工具契约面向 0.3.5；通知与宿主工具入口的分项验收见 [验证记录](VALIDATION.md)，Claude 应用内续跑仍未验证。既有 CLI 注册格式在 0.3.1 编写时以 `codex mcp add --help`、`codex mcp list --help`、`claude mcp add-json --help` 和 `claude mcp list --help` 核对，使用的客户端版本为 Codex CLI `0.162.0-alpha.17.2`、Claude Code `2.1.273`；历史工具发现、多会话和模型成功不代替自动续跑验收。客户端升级后如提示参数变化，以该机 `--help` 和官方文档为准。安装依赖、doctor、工具发现、多会话生命周期、真实模型调用、通知送达和主 AI 处理确认应分别验证。

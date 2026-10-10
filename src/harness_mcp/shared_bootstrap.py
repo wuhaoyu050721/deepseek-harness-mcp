@@ -1,7 +1,6 @@
 """共享后台的私有登记与隐藏启动；不抢占旧数据锁、不终止其他客户端。"""
 
 import asyncio
-from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -206,8 +205,9 @@ def write_private_json(path, value):
             temporary.unlink()
 
 
-def configuration_digest(config):
-    """权限、路由、解释器与实现任一变化都不能静默复用旧后台。"""
+def configuration_digest(config, config_path=None):
+    """运行身份固定；授权由原可信文件更新，不能换文件或复用其他运行环境。"""
+    from .permissions import runtime_configuration
     module_dir = Path(__file__).resolve().parent
     sources = {}
     for path in sorted(module_dir.glob("*.py")):
@@ -223,7 +223,10 @@ def configuration_digest(config):
             raise _unsafe()
         # 安装代码可信；uv 的 wheel 缓存普通硬链接不属于私有令牌文件。
         sources[path.name] = hashlib.sha256(raw).hexdigest()
-    value = {"configuration": asdict(config), "service_version": __version__, "python": {"executable": str(Path(sys.executable).absolute()), "prefix": sys.prefix, "base_prefix": sys.base_prefix, "version": list(sys.version_info[:3]), "implementation": sys.implementation.name}, "module_path": str(module_dir), "sources": sources}
+    value = {"configuration": runtime_configuration(config), "service_version": __version__, "python": {"executable": str(Path(sys.executable).absolute()), "prefix": sys.prefix, "base_prefix": sys.base_prefix, "version": list(sys.version_info[:3]), "implementation": sys.implementation.name}, "module_path": str(module_dir), "sources": sources}
+    if config_path is not None:
+        # Windows 大小写与相对写法归一后，仍只允许后台原来绑定的配置来源。
+        value["config_source"] = os.path.normcase(str(Path(config_path).resolve()))
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=lambda item: str(item) if isinstance(item, Path) else None).encode("ascii")).hexdigest()
 
 
@@ -283,9 +286,9 @@ async def connect_or_start(config, config_path):
     from .shared_client import open_authenticated
     deadline = time.monotonic() + 20
     runtime = await asyncio.to_thread(prepare_private_runtime, config.data_dir / "shared-service")
-    digest = configuration_digest(config)
-    config_path = Path(config_path).absolute()
-    if not config_path.is_absolute() or configuration_digest(load_config(config_path)) != digest:
+    config_path = Path(config_path).resolve()
+    digest = configuration_digest(config, config_path)
+    if not config_path.is_absolute() or configuration_digest(load_config(config_path), config_path) != digest:
         raise HarnessError("SHARED_CONFIG_MISMATCH", "启动配置已变化，请重新加载 MCP 配置。")
 
     known_registry = None
@@ -305,7 +308,7 @@ async def connect_or_start(config, config_path):
         if registry["config_digest"] != digest:
             writer.close()
             await writer.wait_closed()
-            raise HarnessError("SHARED_CONFIG_MISMATCH", "已有会话使用不同的项目权限或模型配置；等待后台空闲退出后重新连接。")
+            raise HarnessError("SHARED_CONFIG_MISMATCH", "已有后台绑定了不同的配置来源、项目或运行设置；等待后台空闲退出后重新连接。")
         return reader, writer, registry
 
     connected = await existing()

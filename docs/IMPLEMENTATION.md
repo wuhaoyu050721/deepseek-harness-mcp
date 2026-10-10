@@ -1,6 +1,6 @@
 # 实现与权限边界
 
-本文描述 0.3.4 的服务结构，包括可选 `--shared` 连接、可信默认编辑模式、Codex 桌面完成通知和 Claude Code 实验 channel。Codex 原对话空闲唤醒、实际自动读取及完成工具入口，Claude 通道传输与隔离已验收；Claude 应用内续跑仍未验证。安装与使用见 [连接教程](MCP-CONNECTION.zh-CN.md)，具体范围见 [验证记录](VALIDATION.md)；历史协议、多会话和模型执行记录不代替自动续跑验收。
+本文描述 0.3.5 的服务结构，包括可信项目权限热更新、可选 `--shared` 连接、可信默认编辑模式、Codex 桌面完成通知和 Claude Code 实验 channel。Codex 原对话空闲唤醒、实际自动读取及完成工具入口，Claude 通道传输与隔离已验收；Claude 应用内续跑仍未验证。安装与使用见 [连接教程](MCP-CONNECTION.zh-CN.md)，具体范围见 [验证记录](VALIDATION.md)；历史协议、多会话和模型执行记录不代替自动续跑验收。
 
 ## 数据流
 
@@ -8,6 +8,7 @@
 MCP stdio 任务工具
   -> 直接模式：本进程 TaskManager
      或 --shared：各前端 SharedClient -> 本机共享后台
+  -> PermissionController：原可信 TOML 复读、运行身份校验、当前权限捕获
   -> TaskManager：统一调度、总期限与取消
   -> JobStore：SQLite 幂等、容量、冻结配置与终态
   -> session：固定项目/模式/范围、每会话串行、历史上下文重建
@@ -28,7 +29,9 @@ MCP stdio 任务工具
 
 `python -m harness_mcp.server --shared --config ...` 保留对外 stdio 协议和任务工具契约。每个客户端会话有自己的前端进程；它们通过私有登记目录发现本机后台，由一个 TaskManager 持有原 `data_dir` 的实例锁，并共同使用原 SQLite、队列、幂等请求和历史。原直接模式不带 `--shared`，仍只允许一个实例使用同一数据目录。
 
-共享连接复用必须匹配可信配置、项目权限、服务版本、代码和解释器身份；匹配失败拒绝接入，不临时替换运行任务的授权。配置或代码更新后，完成或取消旧任务，关闭旧连接，等待后台空闲退出，再重新连接。旧直接实例、未知归属或未确认停止的执行占用数据目录时，共享启动也失败关闭，不删除实例锁、数据库或执行记录，不生成随机数据目录规避恢复。
+共享连接复用必须匹配原可信配置来源、项目 ID/根、运行设置、服务版本、代码和解释器身份。运行身份摘要仅剔除已有项目的 `allow_edits`、`allowed_paths`、`exclude_patterns`、`allow_untracked` 四字段，完整配置版本仍反映它们的变化。正式后台把规范化配置文件路径纳入运行摘要；另一 TOML 即使内容相近也不能复用该后台。纯权限变更允许旧连接继续和新连接接入，由后台从原文件验证最新授权，不接受前端传来的权限对象。
+
+运行身份或代码更新后，完成或取消旧任务，关闭旧连接，等待后台空闲退出，再重新连接。升级到 0.3.5 也须完成一次代码切换，后续四项权限变更无需重启。旧直接实例、未知归属或未确认停止的执行占用数据目录时，共享启动也失败关闭，不删除实例锁、数据库或执行记录，不生成随机数据目录规避恢复。
 
 后台登记和启动文件位于 `data_dir/shared-service`。目录拒绝链接、重解析、硬链接和身份漂移；Windows 权限限制为当前用户及 SYSTEM，POSIX 使用私有目录和文件权限。前后台以回环 TCP 传递有界 JSON，用新挑战、客户端随机值、配置摘要及不同角色标签进行 HMAC 双向认证。客户端先验证后台证明，再在需要时通过内存传递环境变量型模型凭证；凭证不写入启动参数、登记文件或日志。不同凭证的连接不能替换现有后台凭证。这里的本机认证不能隔离当前 Windows 用户下的其他程序。
 
@@ -41,6 +44,8 @@ Windows 后台通过 WMI/CIM 创建隐藏的独立进程，避免继承单个 st
 共享模式在原四个任务工具之外提供 `harness_session_open`、`harness_session_send`、`harness_session_list`。open 固定项目、mode、relative_paths，登记标题和全局幂等编号；send 在该会话授权内创建一轮普通作业，返回 job_id，继续由原 status/result/cancel 管理；list 按项目返回会话与近期任务，重连不要求建立重复会话。旧 `harness_submit` 仍可直接提交独立任务。
 
 不同 session 独立调度和重建上下文，可并行执行；同一 session 有未完成任务时，新一轮 send 返回 `SESSION_BUSY`。默认 `limits.max_parallel_jobs=3`，可信配置允许 1 到 8；`max_queue` 默认 5，运行和等待容量由整个后台共享。子会话不引入账号权限边界，连接同一配置的客户端可访问该配置授权的会话和任务。
+
+会话运行绑定核对项目 ID/根、模型、执行器与 limits，不把四个权限字段的变化当作项目换绑。每轮新请求将会话原允许范围与当前范围求交，排除规则取并集，未跟踪文件按精确路径求交，edit 同时要求原会话及当前项目允许编辑。mode 与显式 relative_paths 仍固定；省略 relative_paths 的旧会话也不因本机放宽而扩大。`session_list.configuration_current` 单独说明运行绑定，`permissions_available`/`permissions_error` 说明当前新轮权限；无效配置时不能把未知绑定状态当成可用。
 
 每轮 worker 创建独立 home 和工作副本，不保留一个持续运行的桌面 UI 会话。继续上下文只由本机保存的该会话脱敏历史报告有限重建，最多最近四轮、16,000 字；不同 session 的历史不会互相混入。编辑后的工作副本不会自动成为下一轮或其他会话的源码。主 AI 核验并合入本轮产物后，下一轮才从新的原项目创建快照；并行编辑仍需检查原文件哈希与冲突。
 
@@ -64,7 +69,13 @@ Claude 适配只在显式 `--claude-channel` 时声明实验 claude/channel capa
 
 可信 TOML 决定 provider、model、base_url、凭证来源、项目范围与资源上限。工具只选择已有项目，不能传入任意本机目录或扩展权限。数据库冻结非秘密执行配置，凭证只存引用，执行时读取并在内存中登记实际凭证值供结果检查。
 
-根字段 `default_mode` 未设置时为 review，新 desktop 初始化配置为 edit；MCP schema 的默认值与可信配置一致。省略模式走可信默认，显式 review 保留只读任务；会话保存解析后的固定模式。edit 仍要求项目 allow_edits=true 和 desktop 后端，默认值本身不授予缺失的项目权限。Docker 不接受默认编辑。改变默认模式后恢复旧请求需传原模式或直接读取原 job_id，避免改变旧请求指纹。
+`PermissionController` 在 submit、preflight、session_open、session_send、service_info 时重新读取启动绑定文件，验证字节与文件归属后解析完整配置。只有已有项目四个权限字段的变化可更新当前配置；项目增删/换根、default_mode、model、executor、limits、completion、data_dir 变化要求重启。不可读、格式错误或来源不符时拒绝新授权操作，不默用先前开放的权限；status/result/cancel/完成确认不受这类新任务阻断影响。一次新操作的验证与 frozen_execution 使用同一个捕获配置，辅助预检也传递该快照，避免 await 前后混用权限。
+
+显式 relative_paths 必须整体落入当前 allowed_paths，越界请求在接纳前拒绝；allowed_paths 空列表撤销新读取。文件排除与 tracked/逐文件 untracked 规则随后仍要验证。排队和运行作业的 execution 已在接纳时保存，权限更新不改写这些行；立即撤销旧执行需要 cancel 并确认停止。同请求编号恢复先查原回执并核对原参数，不把恢复当作新的权限申请，也不重放模型。
+
+service_info 公开 permissions_hot_reload、permissions_version、permissions_reload_state（current/updated/invalid/restart_required/unconfigured）、new_task_permissions_ready、permissions_error，及当前完整 config_version、disk_config_version、restart_required。权限版本只含授权指纹，不公开配置内容；new_task_permissions_ready 表示配置可用于新任务权限校验，并不保证具体范围或队列容量已获接纳。当前工具数量保持直接六/九、共享九/十二，没有权限修改工具或任意配置路径参数。
+
+根字段 `default_mode` 未设置时为 review，新 desktop 初始化配置为 edit；MCP schema 的默认值与可信配置一致。省略模式走可信默认，显式 review 保留只读任务；会话保存解析后的固定模式。edit 仍要求项目 allow_edits=true 和 desktop 后端，默认值本身不授予缺失的项目权限。Docker 不接受默认编辑。0.3.5 底层恢复原请求时，省略模式和时限会采用原存储值；MCP 客户端可能显式传入当前 schema 的默认模式，改变默认模式后应保留原模式或直接读取原 job_id，避免改变旧请求指纹。
 
 文件在 preparing 阶段捕获，默认取保存到工作树的 Git tracked 文件，未跟踪文件按可信配置逐个授权。路径校验拒绝绝对路径、上级、盘符、UNC、ADS、设备名、控制字符和歧义尾部；祖先与文件句柄身份核对 symlink、reparse 和多硬链接。凭证、私钥、依赖、缓存、常见二进制和备份排除规则不能识别全部硬编码秘密。
 

@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "version": "0.3.5",
+  "validation_date": "2026-10-11",
+  "status": "local_regression_and_authenticated_artificial_permissions_probe_passed",
+  "regression": {
+    "tests": 1263,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "junit_cases_include_subtests": true
+  },
+  "dynamic_permissions": {
+    "fields": [
+      "allow_edits",
+      "allowed_paths",
+      "exclude_patterns",
+      "allow_untracked"
+    ],
+    "source": "original_trusted_local_toml_existing_project",
+    "reload": "each_new_submission_preflight_session_operation_and_service_info",
+    "without_service_restart": true,
+    "runtime_config_and_config_file_source_pinned": true,
+    "invalid_configuration_blocks_new_work": true,
+    "existing_queued_and_running_jobs": "frozen_at_submission",
+    "immediate_stop": "explicit_harness_cancel_with_stop_confirmation",
+    "existing_session_permission_widening": "prevented",
+    "session_permissions": "allowed_scope_intersection_exclusions_union_untracked_exact_file_intersection",
+    "original_request_recovery_after_revoke_or_invalid_config": "passed_without_reexecution",
+    "linked_configuration_guard_scope": "replacement_after_source_binding"
+  },
+  "authenticated_mcp_probe": {
+    "status": "passed",
+    "version": "0.3.5",
+    "scope": "artificial_mcp_and_authenticated_shared_rpc_no_model",
+    "existing_and_new_frontends": 2,
+    "shared_backend_instances": 1,
+    "grant_revoke_without_reconnect": true,
+    "session_widening_prevented": true,
+    "captured_job_permissions_unchanged": true,
+    "original_request_recovered_after_revoke_and_invalid_config": true,
+    "permissions_fields_survive_mcp_redaction": true,
+    "source_unchanged": true,
+    "model_tasks_executed": 0,
+    "host_messages_sent": 0
+  },
+  "mcp_tools": {
+    "direct_without_completion": 6,
+    "direct_with_completion": 9,
+    "shared_without_completion": 9,
+    "shared_with_completion": 12
+  },
+  "existing_validation": {
+    "real_desktop_php_export_version": "0.3.4_candidate",
+    "codex_actual_idle_continuation_version": "0.3.3"
+  },
+  "not_verified": [
+    "Claude application channel registration and automatic model continuation",
+    "real provider execution and billing in 0.3.5",
+    "real Docker execution",
+    "other operating systems and Python versions"
+  ],
+  "source_module_sha256": {
+    "src/harness_mcp/__init__.py": "f32dbc3ed6dfee628198d9752324c452eeac2f76e978b33f1e233a84444736db",
+    "src/harness_mcp/claude_channel.py": "4678c16e534c6a1dffbb16d240719b2a3cb643a07381daa9489ab829c1dfc99c",
+    "src/harness_mcp/codex_app_bridge.py": "5fb1cd9e93a9664e636b74d8cc1544f9960300d3118a5e91acbcfaa06991fdd2",
+    "src/harness_mcp/completion.py": "1c7906a06becae32b46610faa3b034f3a7a7f857a3d910d358922305267b8147",
+    "src/harness_mcp/config.py": "a277e5e7060d0622019d1905a25ef0b892b6d9299ca7f982641fafd32b556eec",
+    "src/harness_mcp/conversation.py": "ae7ba2afb155f78bd4e8c5b892c42b35770e214a6dec2521ae995e2494283b74",
+    "src/harness_mcp/desktop_launcher.py": "9c21c99b5aefaa2c3a12f54039077332c01682979f60d2e6bcfbea3627730df5",
+    "src/harness_mcp/desktop_runner.py": "6ee8074e014ceea1c46d9a62e805b9d9bb13c6e329a0b4eab4575c2b623fd8d8",
+    "src/harness_mcp/desktop_worker.py": "6507abea0b19d85f3d8df8c2f92bebf30b883594f4f312d5b3de1a52cdd1e98c",
+    "src/harness_mcp/doctor.py": "69e1b3f2c8d3885b17ceb3015c9add987af92aa377817cfeaf6488e03637e199",
+    "src/harness_mcp/edit_collect_worker.py": "9078ee074c494e3eeb40c1fb48e9ac928fcc2dc8ad8edfe5ba6772284cb4b782",
+    "src/harness_mcp/edit_workspace.py": "8cf3ac8a1ba91971f5e163af323ee9ebf848b26631aa7be24ac6562fd3959f03",
+    "src/harness_mcp/errors.py": "39cee7b3477095fe231b76ef94718e176bf4dc5c289826199b381d900fea2dcb",
+    "src/harness_mcp/harness_adapter.py": "711da8007c708a15ec9ace10663f4cf41580ae329aaa14f1da67413b8fa87f31",
+    "src/harness_mcp/instance_lock.py": "a9d1b0dfa3b2e1196c9775e9a001dbe141020f6dcb0eda83c263b6056f25c575",
+    "src/harness_mcp/job_store.py": "3535d8fd2cc7825c6a4f8b084c47deaa748800065ef388b8a2de4ddc4b125d21",
+    "src/harness_mcp/parallel_manager.py": "6e5ecc8de919c4a9b76afc5f5d66d33c71d48cbf2281827d7bbb3edb1264f6ac",
+    "src/harness_mcp/permissions.py": "8208a0fdde776e03299adf2fbd5ea13728595c3c157501c8454d403809695d9a",
+    "src/harness_mcp/probe.py": "5787e2390d2f567c839a13188a16378925cd2fcb2ff292f16c7b51d52873851d",
+    "src/harness_mcp/process_control.py": "4cca4bb07cb653a797815ac59896ceff1a1b8a1403d694c7fe9e0f6ca47dc383",
+    "src/harness_mcp/redaction.py": "894279c529467b34f2fab82f560d8f2a125ef6491ba89e0665d1e4d2e1e242f9",
+    "src/harness_mcp/report.py": "2e5da2de521d49a1a885b3834faa5bbf050c6f2990068ecd7120409c90cf1f70",
+    "src/harness_mcp/review_prompt.py": "7a5290b8698d5d29ccdf32c0b27aa218c1cca54fe4788151e6899be7c93f5d29",
+    "src/harness_mcp/runner.py": "130f39ad1e64ad5a2dad55fdcc6b8a246ed5b6d1a750887b41076696dde1c3c7",
+    "src/harness_mcp/server.py": "98c7cbdca71db4b67358cf97babdf69552e902365e067bc4b944cf65050f116d",
+    "src/harness_mcp/service_diagnostics.py": "08906a9e8c8ea27ea2da6614ffe0ddde34b32d22116db71388e0343269cf5ec0",
+    "src/harness_mcp/service_state.py": "a68724570f600ec90742cd03623586431fe228f09f47c1d64512fd21d18ee841",
+    "src/harness_mcp/shared_bootstrap.py": "01a79fcc0d59984d7d79aa7d4a7a0cb7b4a2979ebe741699be3dd1648ff817d0",
+    "src/harness_mcp/shared_client.py": "82bdfbf4e08826ba202db4af6dd446347215681d1930c3238fdfd7549b56ada6",
+    "src/harness_mcp/shared_service.py": "5b7fa32b07ee422bd133219c1098c095c2b248d13a19fcacd8923ef488e6ad14",
+    "src/harness_mcp/snapshot_worker.py": "7bdf4b9f9006af636b6f2df83810d76abee8586abe86836bddfb299f57f28260",
+    "src/harness_mcp/source_secrets.py": "41614b45a1fec5a95a1e13b09cc2eee83564f8634771eddcd31ae43e8106517c",
+    "src/harness_mcp/supervisor.py": "dce564ddd96eb8361c86e9581111e8d7eca743119a75fd9aef06d0f92305331f",
+    "src/harness_mcp/task_manager.py": "2aa77c2183617b7c09ab1a2de2a6c8bb6c2fd6e6a36899442dba9450309ff257",
+    "src/harness_mcp/worker.py": "f2b164d5bc9e87bf751b4fb3e6ce839bd1126753f7d14a5a3a3834c68dbb41d2",
+    "src/harness_mcp/workspace.py": "bf5a894ecf9cded4d255f0a507e78b10fb90c128e5255ed3d279482077b16c55"
+  },
+  "fresh_source_installation": {
+    "status": "passed",
+    "scope": "extracted_source_new_venv_no_git_no_model_or_host_messages",
+    "checks": {
+      "locked_dependency_install": {
+        "exit_code": 0,
+        "status": "passed"
+      },
+      "zip_initialization": {
+        "exit_code": 0,
+        "status": "passed"
+      },
+      "desktop_prerequisites": {
+        "exit_code": 0,
+        "status": "passed"
+      }
+    },
+    "mcp": {
+      "status": "passed",
+      "service_version": "0.3.5",
+      "tools_discovered": 12,
+      "default_mode": "edit",
+      "explicit_review_supported": true,
+      "host_context_hidden": true,
+      "model_tasks_submitted": 0,
+      "actual_host_messages_sent": 0
+    },
+    "claude_channel": {
+      "status": "passed",
+      "protocol": "2025-11-25",
+      "experimental_claude_channel": true,
+      "tools_discovered": 12,
+      "model_tasks_submitted": 0,
+      "actual_claude_host_continuation_tested": false
+    },
+    "lifecycle": {
+      "status": "passed",
+      "independent_backends": 2,
+      "idle_exit_confirmed": true
+    },
+    "sample_only_authorized": true,
+    "default_edit_generated": true,
+    "personal_client_configuration_unchanged": true,
+    "runtime_module_count": 36,
+    "final_package_matching": "all_tested_members_except_validation_document_and_public_summary"
+  }
+}

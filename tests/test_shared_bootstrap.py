@@ -27,12 +27,13 @@ def private_runtime(tmp_path, monkeypatch):
     return bootstrap.prepare_private_runtime(tmp_path / "data" / "shared-service")
 
 
-def test_digest_covers_project_authorization_model_and_data_dir(tmp_path):
+def test_digest_separates_project_permissions_from_runtime_identity(tmp_path):
     config = AppConfig(tmp_path / "data", projects={"p": ProjectConfig("p", tmp_path / "project", ("src",))})
     digest = bootstrap.configuration_digest(config)
     assert len(digest) == 64
     assert digest != bootstrap.configuration_digest(replace(config, data_dir=tmp_path / "other"))
-    assert digest != bootstrap.configuration_digest(replace(config, projects={"p": replace(config.projects["p"], allow_edits=True)}))
+    assert digest == bootstrap.configuration_digest(replace(config, projects={"p": replace(config.projects["p"], allow_edits=True)}))
+    assert digest != bootstrap.configuration_digest(replace(config, projects={"p": replace(config.projects["p"], path=tmp_path / "other-project")}))
     assert digest != bootstrap.configuration_digest(replace(config, model=replace(config.model, base_url="https://example.org")))
     assert digest == bootstrap.configuration_digest(config)
 

@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 
-from .config import AppConfig, frozen_execution, normalize_request, request_fingerprint, resolve_credential
+from .config import AppConfig, ExecutorConfig, LimitsConfig, ProjectConfig, frozen_execution, normalize_request, request_fingerprint, resolve_credential
 from .errors import HarnessError, error_from_payload, error_payload
 from .instance_lock import InstanceLock
 from .job_store import JobStore, TERMINAL
@@ -64,6 +64,8 @@ class TaskManager:
     def __init__(self, config: AppConfig, runner=None):
         self.config = config
         self.config_path = None
+        from .permissions import PermissionController
+        self._permissions = PermissionController(config)
         self._preflight_recovery_helpers = {}
         self.injected_runner = runner is not None
         # 持续登记实际交给执行器的凭证；引用轮换后仍须精确拒绝导出新值。
@@ -290,11 +292,53 @@ class TaskManager:
         from .completion import acknowledge
         return acknowledge(self, event_ids, origin)
 
+    def _permission_config(self):
+        if self.config_path is None and self._permissions.source is None:
+            # 未绑定磁盘来源的程序内 API 保持原语义；MCP 生产入口始终绑定启动 TOML。
+            self._permissions.current = self.config
+        self.config = self._permissions.refresh(self.config_path)
+        return self.config
+
+    def _replay_request(self, project_id, prompt, client_request_id, relative_paths=None, timeout_seconds=None, mode=None, session_id=None):
+        """恢复只核对已接纳请求；不读取新授权、不重新入队或扩大原作业。"""
+        if not isinstance(client_request_id, str):
+            return None
+        with self.store._lock:
+            row = self.store.connection.execute("SELECT * FROM jobs WHERE client_request_id=?", (client_request_id,)).fetchone()
+            if row is None:
+                return None
+            job = self.store._decode(row)
+        stored = job["request"]
+        execution = job["execution"]
+        saved = execution["project"]
+        # 此临时配置只校验请求形状与指纹，不能用于冻结/执行新任务。
+        project = ProjectConfig(saved["id"], Path(saved["path"]), allowed_paths=(".",), allow_edits=True)
+        limits = LimitsConfig(**execution["limits"])
+        limits = replace(limits, default_timeout_seconds=stored["timeout_seconds"])
+        replay_config = replace(self.config, projects={project.id:project}, limits=limits,
+                                executor=ExecutorConfig(**execution.get("executor", {"backend":"desktop"})),
+                                default_mode=stored.get("mode", "review"))
+        try:
+            request = normalize_request(replay_config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
+            if session_id is not None:
+                request["session_id"] = session_id
+        except HarnessError:
+            raise HarnessError("IDEMPOTENCY_CONFLICT", "同一请求编号已经绑定了不同的任务参数。") from None
+        if request_fingerprint(request) != job["fingerprint"]:
+            raise HarnessError("IDEMPOTENCY_CONFLICT", "同一请求编号已经绑定了不同的任务参数。")
+        return {**self._with_completion(self._receipt(job)), "idempotent_replay":True, "auto_continue":False}
+
     async def submit(self, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str | None = None, *, completion_origin=None) -> dict:
+        replay = self._replay_request(project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
+        if replay is not None:
+            if completion_origin is not None:
+                self.store.bind_completion(replay["job_id"], self._accepted_origin(completion_origin))
+            return {**self._with_completion(replay), "auto_continue":completion_origin is not None}
         if not self.accepting:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭，不再接受新任务。")
-        request = normalize_request(self.config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
-        job, created = self.store.submit(request, request_fingerprint(request), frozen_execution(self.config, project_id), self.config.limits.max_queue, completion_origin=self._accepted_origin(completion_origin))
+        config = self._permission_config()
+        request = normalize_request(config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
+        job, created = self.store.submit(request, request_fingerprint(request), frozen_execution(config, project_id), config.limits.max_queue, completion_origin=self._accepted_origin(completion_origin))
         self.wakeup.set()
         return {**self._with_completion(self._receipt(job)), "idempotent_replay":not created, "auto_continue": completion_origin is not None}
 
@@ -318,23 +362,27 @@ class TaskManager:
 
     def service_info(self) -> dict:
         from . import __version__
-        from .service_state import configuration_state
+        if self.config_path is None and self._permissions.source is None:
+            self._permissions.current = self.config
+        authorization = self._permissions.information(self.config_path)
+        self.config = self._permissions.current
         with self.store._lock:
             rows = self.store.connection.execute("SELECT status,COUNT(*) FROM jobs GROUP BY status").fetchall()
         counts = {row[0]: row[1] for row in rows}
-        return {"service_version": __version__, **configuration_state(self.config, self.config_path),
+        return {"service_version": __version__, **authorization,
                 "default_mode": self.config.default_mode, "completion_enabled": self.config.completion.auto_continue,
-                "accepting_new_tasks": self.accepting, "queued_tasks": counts.get("queued", 0),
+                "accepting_new_tasks": self.accepting and authorization["new_task_permissions_ready"], "queued_tasks": counts.get("queued", 0),
                 "active_tasks": sum(counts.get(key, 0) for key in ("preparing", "running", "cancelling")),
                 "active_connections": None, "connection_mode": "unattached"}
 
     async def preflight(self, project_id, relative_paths=None, mode=None) -> dict:
         # 准备进程和锁独立归属，绝不能借用正在执行模型任务的准备槽位。
-        request = normalize_request(self.config, project_id, "凭证预检", "preflight-" + uuid.uuid4().hex,
+        config = self._permission_config()
+        request = normalize_request(config, project_id, "凭证预检", "preflight-" + uuid.uuid4().hex,
                                     relative_paths, mode=mode)
         if self.stopping:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭，不再接受预检。")
-        task = asyncio.create_task(self._preflight(request), name="harness-preflight")
+        task = asyncio.create_task(self._preflight(request, config), name="harness-preflight")
         self._preflight_tasks.add(task)
 
         def finished(value):
@@ -345,23 +393,25 @@ class TaskManager:
         task.add_done_callback(finished)
         return await task
 
-    async def _preflight(self, request) -> dict:
+    async def _preflight(self, request, config_snapshot=None) -> dict:
+        from .service_state import config_version
         identity = uuid.uuid4().hex
-        config = replace(self.config, data_dir=self.config.data_dir / "preflights" / identity)
+        selected = self.config if config_snapshot is None else config_snapshot
+        config = replace(selected, data_dir=selected.data_dir / "preflights" / identity)
         helper = TaskManager(config, _PreflightRunner())
         self._preflight_helpers.add(helper)
         helper.secrets = list(self.secrets)
         try:
             # 读取当前实际凭证用于精确比较，不保存、不调用模型。
             try:
-                helper._register_secret(resolve_credential(asdict(self.config.model)))
+                helper._register_secret(resolve_credential(asdict(selected.model)))
             except HarnessError:
                 pass
             # 隔离身份由 helper 目录和 owner_id 保证；短 job_id 避免重复 UUID 拉长 Windows 路径。
             job = {"job_id": "preflight", "request": request, "execution": frozen_execution(config, request["project_id"])}
             result = await asyncio.wait_for(helper._snapshot(job, config.data_dir / "jobs" / "preflight", preflight_only=True), timeout=30)
             return {"passed": True, "project_id": request["project_id"], "mode": request["mode"], **result,
-                    "config_version": self.service_info()["config_version"], "authorization_rechecked_on_submit": True}
+                    "config_version": config_version(selected), "authorization_rechecked_on_submit": True}
         except Exception as error:
             from .errors import error_payload, error_from_payload
             raise error_from_payload(error_payload(error, stage="preflight")) from None

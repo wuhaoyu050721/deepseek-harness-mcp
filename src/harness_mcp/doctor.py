@@ -421,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         from .service_state import configuration_state
         from .service_diagnostics import service_diagnostics
         local_state = configuration_state(config, args.config.resolve())
-        backend_state = service_diagnostics(config)
+        backend_state = service_diagnostics(config, args.config.resolve())
         report["service_state"] = {**local_state, "configuration_scope": "doctor_current_disk",
                                    "restart_required": True if backend_state.get("restart_required") is True
                                    else local_state["restart_required"], "shared_backend": backend_state}

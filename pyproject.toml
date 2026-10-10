@@ -1,6 +1,6 @@
 [project]
 name = "deepseek-harness-mcp"
-version = "0.3.4"
+version = "0.3.5"
 description = "DeepSeek Harness MCP 本地审查与副本修改任务服务"
 requires-python = ">=3.11,<3.15"
 dependencies = [

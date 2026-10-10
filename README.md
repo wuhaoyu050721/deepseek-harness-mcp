@@ -2,7 +2,7 @@
 
 让 **Codex / Claude Code 调用本机 DeepSeek Harness**，完成代码审查或在独立副本中修改代码。主 AI 负责理解需求、设计方案、复核差异和合入验证，DeepSeek 按明确任务书执行。
 
-当前版本 **0.3.4**，默认使用 Windows 桌面后端，直接复用已安装的 Harness runtime，无须 Linux 或 Docker。MCP 使用本机 stdio；教程中的 `--shared` 让多个客户端会话连接同一个本机后台。一个 Codex 或 Claude Code 聊天可以建立多个独立 DeepSeek 子会话并行工作，多个项目窗口也可以分别建立自己的子会话。每轮任务创建独立 Harness home 和代码副本，不接管已打开的桌面聊天。
+当前版本 **0.3.5**，默认使用 Windows 桌面后端，直接复用已安装的 Harness runtime，无须 Linux 或 Docker。MCP 使用本机 stdio；教程中的 `--shared` 让多个客户端会话连接同一个本机后台。一个 Codex 或 Claude Code 聊天可以建立多个独立 DeepSeek 子会话并行工作，多个项目窗口也可以分别建立自己的子会话。每轮任务创建独立 Harness home 和代码副本，不接管已打开的桌面聊天。
 
 [中文连接教程](docs/MCP-CONNECTION.zh-CN.md) · [下载发布包](https://github.com/wuhaoyu050721/deepseek-harness-mcp/releases) · [版本说明](docs/RELEASE-NOTES.md) · [验证范围](docs/VALIDATION.md)
 
@@ -14,14 +14,14 @@
 - **完成后继续处理**：启用可信 `completion.auto_continue` 后，可使用 Codex 桌面原对话通知，或显式启用 Claude Code 的实验 channel。主 AI 收到固定完成事件后读取结果、复核和继续工作。机制绑定、通知写出和处理确认分别记录，不把模型报告作为唤醒指令。
 - **多会话连接**：使用同一可信配置和数据目录的共享连接共用后台调度、等待队列和历史；任一已授权会话都能查询或取消同一任务。关闭一个会话不会关闭其他连接，也不会取消后台任务。
 - **独立子会话**：每个 `session_id` 固定项目、模式和文件范围，保存各自上下文。不同子会话默认最多三个任务并发，同一子会话每次只允许一轮未完成工作。
-- **固定权限与模型**：项目、文件范围、模型、接口地址和凭证引用由本机 TOML 决定，工具参数不能扩大授权。
+- **动态项目权限**：原可信 TOML 中已有项目的编辑开关、读取范围、排除规则和未跟踪文件清单可在下次请求时更新，无需重启。具体任务的模式和范围不能扩大本机授权；模型、项目根和运行设置保持固定。
 - **配套 Skill**：[deepseek-delegate](.agents/skills/deepseek-delegate/SKILL.md) 定义任务书、幂等恢复、差异核验与合入流程，可独立安装到 Codex。
 
 ## 快速安装
 
 准备 Windows、已安装并配置固定 API key 的 DeepSeek Harness 桌面端、Git、uv、Python 3.11–3.14，以及 Codex 或 Claude Code。Git 必须支持 `--no-lazy-fetch`。首次依赖安装需要联网。
 
-从 Releases 下载所需版本的 Windows 源码 ZIP，将其中目录放到 `D:/Tools/deepseek-harness-mcp`，或者克隆仓库到该位置。多会话需要 0.3.2 或更新版本；完成通知和可信默认编辑模式需要 0.3.3。Codex 原生空闲唤醒、自动结果读取和完成工具入口，Claude 通道传输已经验收；具体范围及尚未验证的 Claude 应用内续跑见 [验证范围](docs/VALIDATION.md)。在 PowerShell 中执行：
+从 Releases 下载所需版本的 Windows 源码 ZIP，将其中目录放到 `D:/Tools/deepseek-harness-mcp`，或者克隆仓库到该位置。多会话需要 0.3.2 或更新版本；完成通知和可信默认编辑模式需要 0.3.3，动态项目权限需要 0.3.5。Codex 原生空闲唤醒、自动结果读取和完成工具入口，Claude 通道传输已经验收；具体范围及尚未验证的 Claude 应用内续跑见 [验证范围](docs/VALIDATION.md)。在 PowerShell 中执行：
 
 ```powershell
 Set-Location 'D:\Tools\deepseek-harness-mcp'
@@ -43,7 +43,7 @@ codex mcp list
 
 ## MCP 工具
 
-0.3.4 可先用 `harness_preflight` 检查待提交范围，正常 PHP 空值、变量和动态认证头保持原始源码字节。`harness_service_info` 显示配置版本、重连需求和活动数量；修改配置后完成原任务、关闭旧连接再重连。结果按需使用 `view="summary"`、`"patch"`、`"files"` 或兼容的 `"full"`，切换视图从无游标开始。执行 succeeded 与引用 valid/invalid/unknown、补丁 available_for_review 分别展示；后者仍需主 AI 核对当前基线并验证。
+可先用 `harness_preflight` 检查待提交范围，正常 PHP 空值、变量和动态认证头保持原始源码字节。0.3.5 的 `harness_service_info` 同时刷新原文件中的项目权限，显示权限版本、更新状态、配置版本和活动数量；只有运行设置或配置来源变化才需要后台切换。结果按需使用 `view="summary"`、`"patch"`、`"files"` 或兼容的 `"full"`，切换视图从无游标开始。执行 succeeded 与引用 valid/invalid/unknown、补丁 available_for_review 分别展示；后者仍需主 AI 核对当前基线并验证。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -51,7 +51,7 @@ codex mcp list
 | `harness_status` | 查询状态、阶段、耗时和安全错误 |
 | `harness_result` | 读取报告与修改内容，支持游标分页 |
 | `harness_preflight` | 提交前检查授权源码；命中凭证时返回脱敏规则、相对路径和行号，成功返回检查计数，不调用模型 |
-| `harness_service_info` | 查询配置版本、重连需求、活动连接和任务数量 |
+| `harness_service_info` | 刷新可信项目权限，查询权限/配置版本、更新状态、重连需求、活动连接和任务数量 |
 | `harness_cancel` | 请求取消，随后查询是否确认停止 |
 | `harness_session_open` | 共享模式：登记固定项目、模式和范围的独立子会话，返回 `session_id` |
 | `harness_session_send` | 共享模式：向已有子会话提交下一轮任务，返回 `job_id` |
@@ -66,7 +66,7 @@ Codex 通知目标来自宿主 thread/turn 元数据和本机正规 app-tools �
 
 普通 Claude 连接支持审查、编辑与子代理工具，工具数量取决于 completion 开关（共享模式九或十二个），完成机制缺少上下文时回执为 false。Claude 实验推送需服务启动参数 `--claude-channel`、客户端 legacy 协议以及交互启动 `--dangerously-load-development-channels server:deepseek_harness`；详细步骤见 [Claude channel 接入](docs/MCP-CONNECTION.zh-CN.md)。每个 stdio 前端使用私有连接标识区分窗口，进程重启会产生新身份，已有绑定不能用 watch 改投新会话；保留原 job_id 仍可读取结果继续处理。
 
-`--shared` 保持一个后台持有数据目录的实例锁。最后一个前端断开后，有等待或运行任务时后台继续工作；无连接且无任务时，默认等待 30 秒后安全退出。不带 `--shared` 的直接模式仍只允许一个服务使用同一数据目录。升级、修改授权或切换到共享模式时，请先完成或取消任务、关闭旧连接，再重新连接；不要删除锁或数据库，也不要更换数据目录绕过未确认停止的执行。
+`--shared` 保持一个后台持有数据目录的实例锁。最后一个前端断开后，有等待或运行任务时后台继续工作；无连接且无任务时，默认等待 30 秒后安全退出。不带 `--shared` 的直接模式仍只允许一个服务使用同一数据目录。升级代码、改变运行设置或切换到共享模式时，请先完成或取消任务、关闭旧连接，再重新连接；0.3.5 中四个已有项目权限字段的变更无需关闭连接。不要删除锁或数据库，也不要更换数据目录绕过未确认停止的执行。
 
 需要多个 DeepSeek 子代理时，分别用 `harness_session_open` 建立会话，例如同一项目的接口审查和错误处理审查各用一个 `session_id`，再用 `harness_session_send` 提交各自任务。多个项目窗口则各建一个绑定本项目的会话；窗口重连后通过 `harness_session_list` 恢复原会话。请求编号在共享后台全局唯一，建议加项目、窗口和子会话前缀。
 
@@ -91,7 +91,13 @@ allow_untracked = []
 allow_edits = true
 ```
 
-默认只取已保存的 Git tracked 文件。未跟踪文件需要在 `allow_untracked` 中逐文件授权；读取范围也限制可修改范围。项目允许副本编辑后，单次只审查可以指定 `mode="review"`，无需反复更改权限或重载；长期禁止某项目编辑才使用 `allow_edits=false`。共享后台固定启动时的配置，配置或服务代码变化后拒绝复用旧后台。请先完成或取消旧任务，关闭使用旧配置的全部连接，等待后台空闲退出，再重新连接。
+默认只取已保存的 Git tracked 文件。未跟踪文件需要在 `allow_untracked` 中逐文件授权；读取范围也限制可修改范围。每个具体任务建议明确 `mode` 和 `relative_paths`，范围必须是当前 `allowed_paths` 的子集，不能用更宽目录请求再由服务静默过滤。新增文件需要授权其父目录。
+
+已有项目的 `allow_edits`、`allowed_paths`、`exclude_patterns`、`allow_untracked` 保存到原可信 TOML 后，下一次提交、预检、创建/发送子会话或查询服务信息都会重新读取，无需重启旧连接或新连接。`allow_edits=false` 禁止接纳新的 edit；`allowed_paths=[]` 撤销新任务读取范围。配置错误会阻止新任务，原任务的结果、状态和取消仍可使用。`harness_service_info` 可查看 `permissions_hot_reload`、`permissions_version`、`permissions_reload_state`、`new_task_permissions_ready` 和 `permissions_error`；就绪字段仅表示配置可用于新任务权限校验，不代替某个任务的范围检查。
+
+已接纳的排队/运行任务冻结原权限，收回权限不会修改这些任务；需要立即停止时调用 `harness_cancel` 并确认停止。旧子会话的新一轮使用原授权范围与当前范围的交集，排除规则取并集，未跟踪文件按精确路径求交；本机放宽权限不会扩大旧会话，mode 也不会隐式变化。需要新范围时创建新会话。`harness_session_list` 分别显示运行配置是否仍匹配和当前权限是否可用。
+
+增加/删除项目、改变项目根、默认模式、模型、执行器、limits、completion、数据目录、配置文件来源或服务代码仍需切换后台。升级到 0.3.5 本身也需一次完成或取消旧任务、关闭全部旧连接并等待后台退出；之后上述四项权限可直接更新。工具不接受权限内容或其他配置路径参数。
 
 模式的真实 schema 默认值取自可信根配置 `default_mode`。新 desktop 配置为 `edit`，旧配置仍为 `review`；编码也可显式指定 `mode="edit"`，只读则指定 `mode="review"`。Docker 当前仅支持审查，不能设置编辑默认。成功结果返回 `edit_ready=true`、`source_applied=false`、实际差异与内容摘要。主 AI 读取完整分页、检查路径和行为、核对当前源文件匹配 `before_sha256` 后才能合入，再运行必要验证。模型自述的改动或测试不能代替真实检查。
 

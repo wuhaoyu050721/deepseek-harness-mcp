@@ -103,10 +103,12 @@ def _bounded_int(value, lower: int, upper: int, name: str) -> int:
     return value
 
 
-def load_config(path: Path) -> AppConfig:
+def load_config(path: Path, *, source_bytes: bytes | None = None) -> AppConfig:
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        # 热授权入口传入已校验句柄读出的同一批字节，避免验证后再次打开文件。
+        content = path.read_text(encoding="utf-8") if source_bytes is None else source_bytes.decode("utf-8")
+        data = tomllib.loads(content)
+    except (OSError, ValueError, UnicodeError):
         raise HarnessError("INVALID_CONFIG", "配置文件无法读取或 TOML 格式不正确。") from None
     _known_keys(data, {"data_dir", "default_mode", "completion", "model", "executor", "limits", "projects"}, "根配置")
     default_mode = data.get("default_mode", "review")
@@ -222,6 +224,11 @@ def normalize_request(config: AppConfig, project_id: str, prompt: str, client_re
     if relative_paths == []:
         raise HarnessError("EMPTY_SCOPE", "显式任务范围不能为空；省略时才使用配置默认范围。")
     paths = sorted(set(normalize_relative_path(item) for item in relative_paths)) if relative_paths else None
+    allowed = config.projects[project_id].allowed_paths
+    if not allowed:
+        raise HarnessError("EMPTY_AUTHORIZATION", "项目未配置可读取范围。")
+    if paths and any(not any(scope == "." or item == scope or item.startswith(scope + "/") for scope in allowed) for item in paths):
+        raise HarnessError("PATH_NOT_AUTHORIZED", "请求的文件范围超出管理员授权。")
     timeout = config.limits.default_timeout_seconds if timeout_seconds is None else timeout_seconds
     if isinstance(timeout,bool) or not isinstance(timeout,int) or not 1 <= timeout <= config.limits.max_timeout_seconds:
         raise HarnessError("INVALID_TIMEOUT", "超时必须位于管理员配置的范围内。")

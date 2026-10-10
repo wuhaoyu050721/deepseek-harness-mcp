@@ -36,7 +36,7 @@ description: >
 
 首次调用或当前客户端能力变化时，读取 [MCP 契约与兼容处理](references/mcp-contract.md)，核对真实工具 schema、授权项目和执行模式。不要根据旧 README 或本 Skill 推定正在运行的服务能力。
 
-编码使用 `harness_submit(..., mode="edit")`，或核对真实 schema 确认可信默认模式已为 edit 后省略模式。0.3.3 新 desktop 配置默认 edit，旧配置仍默认 review；需要只读调查时显式指定 `mode="review"`，无需反复关闭项目编辑权限或热重载。edit 修改独立副本，由主 AI 合入原项目；仍要求 Windows `desktop` 和可信项目配置 `allow_edits=true`。Skill 本身不能开启该能力。
+编码建议使用 `harness_submit(..., mode="edit", relative_paths=本次最小范围)`，只读调查明确 `mode="review"`。可在核对真实 schema 确认可信默认模式后省略模式，但恢复任务应保留原解析模式。0.3.3 起新 desktop 配置默认 edit，旧配置仍默认 review；单次只读无需切换项目权限。edit 修改独立副本，由主 AI 合入原项目；仍要求 Windows `desktop` 和可信项目配置 `allow_edits=true`。Skill 本身不能开启该能力，本机授权上限也不等于可直接写回原项目。
 
 只读旧接口、编辑未授权或工具不可用时，不假装已完成编码，不用 review 绕过写入边界。报告具体缺口，在原授权范围内由主 AI 继续可完成的工作；需要新增项目或权限的信息另行取得，不自动修改凭证、注册或授权配置。
 
@@ -44,13 +44,19 @@ description: >
 
 当实时工具提供 `harness_session_open/send/list` 时，可在一个 Codex 对话创建多个命名的 DeepSeek 子代理，分别负责明确且独立的任务。多窗口按各自项目创建会话，保存 `session_id`，后续追问使用原会话。每个会话绑定项目、模式和相对范围，不能通过消息切换项目或扩大范围。同一会话上一轮未结束时先查询/取消原 `job_id`，不要另外提交重叠追问。
 
+0.3.5 的旧会话新轮按原授权与当前授权的交集接纳：allowed_paths 求交，exclude_patterns 并集，allow_untracked 按精确文件路径求交；mode 不隐式改变。本机放宽不能扩大旧会话，需要新范围时创建新会话。session_list 的 configuration_current 仅表示运行绑定；permissions_available/permissions_error 另表明新轮当前权限。不要因纯权限变化重建所有会话，也不要把已冻结旧作业当作已撤销。
+
 共享模式默认全局三个执行位置（可信配置 `limits.max_parallel_jobs`，1–8），等待队列最多五个；不同会话不共享对话材料、执行 home 或编辑副本。同一会话只从最近四轮已脱敏报告恢复最多16000字符的历史，每轮仍以当前源项目准备独立副本；上一轮尚未合入的修改不会自动成为下一轮或其他子代理的代码。主 AI 合入后再交依赖任务。
 
 旧服务只提供四工具时继续使用 `harness_submit` 单任务流程，不虚构子代理接口。连接共享后台时，关闭一个 Codex 会话不取消后台任务；需要停止仍调用 `harness_cancel(job_id)`。请求编号在共享后台全局唯一，建议使用项目/子代理/轮次前缀。
 
 提交前保存本次完整参数、最终模式与唯一 `client_request_id`；收到回执后保存 `job_id`。用短记录或任务元数据保存即可，不写入源码/版本控制，不包含密钥。响应不明时以相同编号和完全相同参数恢复；新需求或纠错才用新编号。默认模式升级后，恢复旧 review 请求必须显式保留原模式，或直接按旧 job_id 读取，不以新的默认 edit 改写旧请求。
 
-实时工具提供 `harness_preflight` 时，先按相同项目、范围和模式做凭证预检。预检不调用模型，失败只显示脱敏规则、相对路径和行号；通过不构成可复用通行证，正式任务重新检查当前字节。不要将源码字面量凭证替换为真实密钥来通过检查。若权限配置刚变，先用 `harness_service_info` 核对当前和磁盘配置版本、`restart_required`、活动连接和任务数量，再完成或取消原任务并关闭旧连接；不删除锁或改数据目录绕过运行任务。
+实时工具提供 `harness_preflight` 时，先按相同项目、范围和模式做凭证预检。预检不调用模型，失败只显示脱敏规则、相对路径和行号；通过不构成可复用通行证，正式任务重新检查当前字节。不要将源码字面量凭证替换为真实密钥来通过检查。显式 relative_paths 必须整体属于当前 allowed_paths；空授权拒绝新读取，不能请求更宽目录后依靠过滤缩小。
+
+0.3.5 从原可信 TOML 重新读取已有项目的 allow_edits/allowed_paths/exclude_patterns/allow_untracked，submit/preflight/open/send/service_info 都会检查，纯权限变化无需重启。若配置刚变，用 service_info 核对 permissions_hot_reload、permissions_version、permissions_reload_state、new_task_permissions_ready、permissions_error 和完整配置版本；就绪仅说明配置可用于新任务校验，不保证本批权限或容量。无效文件阻止新提交，修复原文件后再检查；不自动修改未获用户授权的权限配置，不传虚构权限/配置路径参数。
+
+升级代码或改变项目 ID/根、default_mode、model、executor、limits、completion、data_dir、配置来源时仍需完成或取消原任务、关闭旧连接并等待后台退出；升级到 0.3.5 本身也需一次切换。已排队/运行作业保留接纳时冻结的权限，立即停止需 cancel 并确认停止。原请求 ID 和相同参数先恢复原回执，权限收紧不重放模型；result/status/cancel/完成确认仍可使用。不删除锁或换数据目录绕过运行归属。旧版服务不具备热更新时遵循真实状态及原重连流程。
 
 可信 completion 开关开启时检查实际通知机制。Codex 桌面须有可信宿主上下文，动态通道按环境白名单透传，并通过能力及原对话归属的只读预检；失败回执 `auto_continue=false` 与原因不影响普通模型任务。Claude 普通连接支持审查、编辑、子代理工具，推送另需服务 `--claude-channel`、客户端 legacy 协议及交互启动渠道登记。`auto_continue=true` 仅证明机制绑定；Claude 渠道许可不向服务反馈，不能从 true 推断客户端已接收。没有绑定或渠道不可用时按 `poll_after_seconds` 查询，期间继续独立工作。用户要求取消时调用 `harness_cancel` 并核对停止终态；一次查询或等待中断不等于取消。
 
@@ -66,7 +72,7 @@ DeepSeek 的最终说明遵循 MCP 固定 JSON 格式；实际差异由宿主从
 
 先看摘要和真实改动清单，再读取合入所需的完整差异；对修改的逻辑及其关键调用点进行复核。用工具编排缓存分页/完整文本，向主 AI 展示必要的摘要和差异，合入直接使用校验后的内容。避免同时把 `after_text`、补丁和整个原文件重复装入上下文；没有理由时不重新通读未修改的模块。
 
-0.3.4 提供 `view="summary"`（摘要和引用）、`view="patch"`（机械清单及补丁）、`view="files"`（机械清单及完整文件片段）和兼容的 `full`。游标绑定视图；切换视图从无游标开始。自然元数据仅轻视图首页返回，沿各自游标完整读取实际需要的内容，不再把所有表示重复装入上下文。`execution_status` 只描述执行，`quality.citations` 的 valid/invalid/unknown 是保留引用的质量计数；`quality.patch.availability="available_for_review"` 只表示机械补丁可供复核。仍须本地核对基线哈希、业务范围和测试，不能直接称为可安全合入。`source_applied=false`、`tests=not_run` 不由结果读取改变。
+0.3.4 及更新版本提供 `view="summary"`（摘要和引用）、`view="patch"`（机械清单及补丁）、`view="files"`（机械清单及完整文件片段）和兼容的 `full`。游标绑定视图；切换视图从无游标开始。自然元数据仅轻视图首页返回，沿各自游标完整读取实际需要的内容，不再把所有表示重复装入上下文。`execution_status` 只描述执行，`quality.citations` 的 valid/invalid/unknown 是保留引用的质量计数；`quality.patch.availability="available_for_review"` 只表示机械补丁可供复核。仍须本地核对基线哈希、业务范围和测试，不能直接称为可安全合入。`source_applied=false`、`tests=not_run` 不由结果读取改变。
 
 只有作业 `succeeded`、报告可用且机械编辑结果完整可验，才进入合入。检查方案符合性、路径范围、关键行为、现有工作区改动和必要边界。摘要不能代替实际差异。
 

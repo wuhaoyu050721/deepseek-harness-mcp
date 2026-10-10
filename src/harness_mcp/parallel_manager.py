@@ -103,11 +103,17 @@ class ParallelTaskManager(TaskManager):
         )
 
     async def submit(self, project_id: str, prompt: str, client_request_id: str, relative_paths=None, timeout_seconds=None, mode: str | None = None, *, completion_origin=None) -> dict:
+        replay = self._replay_request(project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
+        if replay is not None:
+            if completion_origin is not None:
+                self.store.bind_completion(replay["job_id"], self._accepted_origin(completion_origin))
+            return {**self._with_completion(replay), "auto_continue":completion_origin is not None}
         if not self.accepting:
             raise HarnessError("SERVICE_STOPPING", "服务正在关闭或确认旧执行停止，不再接受新任务。")
-        request = normalize_request(self.config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
-        job, created = self.store.submit_parallel(request, request_fingerprint(request), frozen_execution(self.config, project_id),
-                                                 self.config.limits.max_queue, self.config.limits.max_parallel_jobs, completion_origin=self._accepted_origin(completion_origin))
+        config = self._permission_config()
+        request = normalize_request(config, project_id, prompt, client_request_id, relative_paths, timeout_seconds, mode)
+        job, created = self.store.submit_parallel(request, request_fingerprint(request), frozen_execution(config, project_id),
+                                                 config.limits.max_queue, config.limits.max_parallel_jobs, completion_origin=self._accepted_origin(completion_origin))
         self.wakeup.set()
         return {**self._with_completion(self._receipt(job)), "idempotent_replay": not created, "auto_continue": completion_origin is not None}
 
